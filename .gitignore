@@ -1,0 +1,9 @@
+# swap files
+*.swp
+*.swo
+
+# local directories
+output/
+jobs/errors/
+jobs/logs/
+
