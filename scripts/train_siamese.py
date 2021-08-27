@@ -177,7 +177,7 @@ class NormalDataset(Dataset):
 
 
 def plot_tsne(data, labels, ppl=20):
-    """Takes"""
+    """Takes embedded samples and creates visualization using t-SNE"""
     # perform PCA on dataframe before doing t-SNE to reduce computational burden (this is recommended)
     if data.shape[1] > 50:
         pca = PCA(n_components=50)
