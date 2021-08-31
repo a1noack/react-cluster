@@ -1,11 +1,10 @@
 """Script for training a Siamese network to embed attacks"""
+import joblib
 import logging
 import os
 from pathlib import Path
 import random
 import time
-import warnings
-warnings.simplefilter(action='ignore', category=FutureWarning)
 
 import configargparse
 import matplotlib.pyplot as plt
@@ -299,6 +298,8 @@ if __name__ == '__main__':
         args.hid_size, args.out_size, args.select_on_val, args.group_size, int(time.time())))
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     output_file_handler = logging.FileHandler(os.path.join(out_dir, 'output.log'))
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    output_file_handler.setFormatter(formatter)
     logger.addHandler(output_file_handler)
 
     # load the extracted feature data
@@ -319,8 +320,9 @@ if __name__ == '__main__':
 
     # remove samples that aren't in new, smaller group
     if args.use_elite_attackers_only:
-        df = df[df.label.isin(ELITE_ATTACKS)]
-        logger.info(f'Removed all samples not produced by one of the following attack methods: {ELITE_ATTACKS}')
+        elite_attacks = list(set(ELITE_ATTACKS + args.held_out))  # add held out attacks to ELITE_ATTACKS
+        df = df[df.label.isin(elite_attacks)]
+        logger.info(f'Removed all samples not produced by one of the following attack methods: {elite_attacks}')
         logger.info(f'Attack counts now: {dict(df.label.value_counts())}')
 
     # downsample for clustering efficiency
@@ -357,6 +359,8 @@ if __name__ == '__main__':
     # scale the data
     scaler = StandardScaler().fit(dataset_train.data)
     logger.info(f'Fitted scaler to training data.')
+    joblib.dump(scaler, os.path.join(out_dir, 'scaler.pkl'))
+    logger.info(f'Saved fitted sklearn StandardScaler to output directory.')
 
     # instantiate net, turn on drop out, and move to GPU
     net = SiameseNet(in_size=df_train.shape[1]-1, hid_size=args.hid_size, out_size=args.out_size,
@@ -388,8 +392,6 @@ if __name__ == '__main__':
             # prepare the data
             x1, x2 = torch.Tensor(scaler.transform(x1)), torch.Tensor(scaler.transform(x2))  # scale the samples
             x1, x2, y = x1.to(device), x2.to(device), y.to(device)  # move the samples and label to the device
-
-            logger.info(f'x1 = {x1}')
 
             # forward pass to get loss
             optimizer.zero_grad()
@@ -466,6 +468,7 @@ if __name__ == '__main__':
     # compress the test set samples with one of the twins
     all_embedded_samples = []
     labels = []
+    s = time.time()
     for batch_id, (x, y) in enumerate(dataloader_test, 1):
 
         # if multiple samples in group, reshape inputs so that they can pass through network nicely
@@ -484,19 +487,26 @@ if __name__ == '__main__':
 
         all_embedded_samples.append(x_)
         labels.append(y)
+    logger.info(f'Embedded all test set samples. {time.time() - s}s')
 
     data = torch.cat(all_embedded_samples, dim=0).detach().cpu().numpy()
     labels = np.hstack(labels)
 
     # save embedded samples
+    s = time.time()
     np.save(os.path.join(out_dir, 'embedded_samples.npy'), data)
     np.save(os.path.join(out_dir, 'labels.npy'), labels)
+    logger.info(f'Saved embedded samples. {time.time() - s}s')
 
     # perform t-SNE on compressed samples
+    s = time.time()
     for ppl in [2, 5, 10, 30, 50, 100]:  # try full range of perplexity values
         plot_tsne(data, labels, ppl)
+    logger.info(f'Plotted compressed samples using t-SNE. {time.time() - s}s')
 
     # plot training and validation losses
+    s = time.time()
     plot_losses(train_loss_list, val_loss_list)
+    logger.info(f'Plotted loss curves. {time.time() - s}s')
 
     logger.info(f'DONE.')
