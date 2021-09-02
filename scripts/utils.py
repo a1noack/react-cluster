@@ -1,8 +1,12 @@
 import joblib
+import os
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import os
+import seaborn as sns
 from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 
 
 BERT_FEATS = ['tp_bert']
@@ -130,3 +134,50 @@ def downsample(df, n=100):
     df = pd.concat(dfs)
 
     return df
+
+
+def plot_tsne(data, labels, out_dir, ppl=20):
+    """Takes embedded samples and creates visualization using t-SNE"""
+    # perform PCA on dataframe before doing t-SNE to reduce computational burden (this is recommended)
+    if data.shape[1] > 50:
+        pca = PCA(n_components=50)
+        pca_result = pca.fit_transform(data)
+    else:
+        pca_result = data
+
+    # fit t-SNE on output produced by PCA
+    tsne = TSNE(n_components=2, verbose=0, perplexity=ppl, n_iter=10000)
+    tsne_results = tsne.fit_transform(pca_result)
+
+    # set graph size
+    size = 15
+    diff = 0
+    params = {
+        'font.size': size,
+        'axes.titlesize': size,
+        'axes.labelsize': size - diff,
+        'xtick.labelsize': size - diff,
+        'ytick.labelsize': size - diff,
+        'figure.figsize': (18, 11),
+    }
+    plt.rcParams.update(params)
+
+    # create dataframe for plotting
+    _df = pd.DataFrame()
+    _df['tsne-one'] = tsne_results[:, 0]
+    _df['tsne-two'] = tsne_results[:, 1]
+    _df['label'] = labels
+
+    # plot the figure
+    plt.figure(figsize=(18, 11))
+    sns.scatterplot(
+        x="tsne-one", y="tsne-two",
+        hue="label",
+        palette=sns.color_palette("Paired", len(set(labels))),
+        data=_df,
+        legend="full",
+        alpha=0.8
+    )
+    plt.title(f't-SNE with perplexity = {ppl}')
+    plt.savefig(os.path.join(out_dir, f'tsne{ppl}.png'))
+    plt.close()
