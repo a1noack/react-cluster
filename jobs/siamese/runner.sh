@@ -18,7 +18,7 @@ val=${10}
 n=${11}
 n_layer=${12}
 group_size=${13}
-held_out=()  # ('hotflip' 'viper')
+held_out=('iga_wang' 'faster_genetic' 'genetic')
 
 python3 scripts/train_siamese.py \
     --model $model \
@@ -34,5 +34,5 @@ python3 scripts/train_siamese.py \
     --n $n \
     --n_layer $n_layer \
     --group_size $group_size \
-    #--held_out "${held_out[@]}"
+    --held_out "${held_out[@]}"
 
