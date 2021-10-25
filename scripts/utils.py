@@ -167,17 +167,46 @@ def plot_tsne(data, labels, out_dir, ppl=20):
     _df['tsne-one'] = tsne_results[:, 0]
     _df['tsne-two'] = tsne_results[:, 1]
     _df['label'] = labels
+    _df = _df.sort_values(by=['label'])
+
+    # choose colors for attacks
+    palette = {'genetic': "gray",
+               'deepwordbug': "orange",
+               'clean': 'green',
+               'pruthi': 'indigo',
+               'hotflip': 'red',
+               'iga_wang': 'black',
+               'faster_genetic': 'magenta',
+               'pruthiv1': "yellow",
+               'pruthiv2': 'blue',
+               'pruthiv3': 'cyan',
+               'deepwordbugv1': 'lightblue',
+               'deepwordbugv2': 'lightgreen',
+               'deepwordbugv3': 'pink',
+               'textbuggerv1': 'maroon',
+               'textbuggerv2': 'purple',
+               'textbuggerv3': 'beige'}
 
     # plot the figure
     plt.figure(figsize=(18, 11))
-    sns.scatterplot(
-        x="tsne-one", y="tsne-two",
-        hue="label",
-        palette=sns.color_palette("Paired", len(set(labels))),
-        data=_df,
-        legend="full",
-        alpha=0.8
-    )
+    try:
+        sns.scatterplot(
+            x="tsne-one", y="tsne-two",
+            hue="label",
+            palette=palette,
+            data=_df,
+            legend="full",
+            alpha=0.8
+        )
+    except ValueError:
+        sns.scatterplot(
+            x="tsne-one", y="tsne-two",
+            hue="label",
+            palette=sns.color_palette("Paired", len(set(labels))),
+            data=_df,
+            legend="full",
+            alpha=0.8
+        )
     plt.title(f't-SNE with perplexity = {ppl}')
     plt.savefig(os.path.join(out_dir, f'tsne{ppl}.png'))
     plt.close()
