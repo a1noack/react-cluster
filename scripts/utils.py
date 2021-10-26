@@ -58,7 +58,7 @@ def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbo
             if verbosity > 0 and logger is not None:
                 logger.info('\tskipping!')
             continue
-        if 'nuclear' in filename or 'waterloo' in filename or 'fnc1' in filename:
+        if 'nuclear' in filename or 'fnc1' in filename:
             continue
 
         instances = joblib.load(os.path.join(dir_path, filename))
