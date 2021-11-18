@@ -1,3 +1,5 @@
+import random
+
 import torch
 import numpy as np
 import torch.nn as nn
@@ -53,6 +55,7 @@ class SiameseNet(nn.Module):
         # get the distance between the samples in the embedding space
         dist = torch.abs(out1 - out2)
         out = self.out(dist)
+        out = out if self.group_size > 1 else out.squeeze()
 
         return out
 
@@ -64,7 +67,7 @@ class SiameseDataset(Dataset):
     attack method (label=1) or by different attack methods (label=0)"""
     def __init__(self, df, freq=None, group_size=1):
         self.labels = df['label'].values
-        self.data = df.drop(['label'], axis=1)
+        self.data = df.drop(['label', 'key'], axis=1, errors='ignore')
         self.freq = 1 / len(set(self.labels)) if freq is None else freq  # set 'same' class frequency
         self.group_size = group_size
 
@@ -101,7 +104,7 @@ class SiameseDataset(Dataset):
             if np.random.randn() < self.freq:
                 available_idxs = np.array(sorted(set(np.where(self.labels == y1)[0]) - set(idxs1)))
                 idxs2 = np.random.choice(available_idxs, size=self.group_size, replace=False)
-                y = 1
+                y = np.array([1], dtype=np.float32)
 
             # get indexes for a group of samples produced by a different attack method
             else:
@@ -109,7 +112,7 @@ class SiameseDataset(Dataset):
                 while y2 == y1:  # randomly choose label for second group of samples
                     y2 = np.random.choice(self.labels)
                 idxs2 = np.random.choice(np.where(self.labels == y2)[0], size=self.group_size, replace=False)
-                y = 0
+                y = np.array([0], dtype=np.float32)
 
             # get group of samples at second group of indices
             x2 = self.data.iloc[idxs2].values
@@ -117,21 +120,18 @@ class SiameseDataset(Dataset):
             # check to make sure that the two groups have the same, correct size
             assert x1.shape[0] == self.group_size == x2.shape[0], "Incorrect group size!"
 
-        # prepare for network
-        x1 = torch.Tensor(x1)
-        x2 = torch.Tensor(x2)
-        y = torch.from_numpy(np.array([y], dtype=np.float32))
-
         return x1, x2, y
 
 
 class NormalDataset(Dataset):
     """Returns a single sample and a label or a group of samples that
     were all produced by the same attack method and their label"""
-    def __init__(self, df, group_size=1):
+    def __init__(self, df, group_size=1, reuse_samples=False):
         self.labels = df['label'].values
-        self.data = df.drop(['label'], axis=1)
+        self.data = df.drop(['label', 'key'], axis=1, errors='ignore')
         self.group_size = group_size
+        self.reuse_samples = reuse_samples
+        self.used_idxs = []
 
     def __len__(self):
         return len(self.labels)
@@ -143,11 +143,21 @@ class NormalDataset(Dataset):
 
         # return a group of self.group_size samples
         else:
-            y = self.labels[idx]  # y is a string; e.g. 'hotflip'
-            idxs1 = np.random.choice(np.where(self.labels == y)[0], size=self.group_size, replace=False)
-            x = self.data.iloc[idxs1].values
+            y = random.choice(self.labels)  # y is a string; e.g. 'hotflip'
 
-        # prepare for network
-        x = torch.Tensor(x)
+            # each sample can appear in MULTIPLE groups
+            if self.reuse_samples:
+                idxs1 = np.random.choice(np.where(self.labels == y)[0], size=self.group_size, replace=False)
+
+            # each sample can only appear in ONE group
+            else:
+                try:
+                    idxs1 = np.random.choice(sorted(set(np.where(self.labels == y)[0]) - set(self.used_idxs)),
+                                             size=self.group_size, replace=False)
+                    self.used_idxs.extend(idxs1)
+                except ValueError:
+                    raise StopIteration  # stop iterating if all samples have been used up
+
+            x = self.data.iloc[idxs1].values
 
         return x, y
