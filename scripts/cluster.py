@@ -14,12 +14,21 @@ import numpy as np
 import pandas as pd
 from sklearn.cluster import AffinityPropagation, AgglomerativeClustering, \
     Birch, DBSCAN, KMeans, MeanShift, OPTICS, SpectralClustering
-from sklearn.metrics import rand_score, normalized_mutual_info_score
+from sklearn.metrics import adjusted_rand_score, adjusted_mutual_info_score, \
+    rand_score, normalized_mutual_info_score
 from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import StandardScaler
+import torch
+from torch.utils.data import DataLoader
+import yaml
 
+from models import SiameseNet, NormalDataset
 from utils import load_joblib_data, downsample
 
+
+# use only the attacks below when determining cluster centers
+ATTACKS_CONSIDERED = ['hotflip', 'deepwordbug', 'textbugger', 'pruthi', 'clean']
+HELD_OUT = ['iga_wang', 'faster_genetic', 'genetic']
 
 ALGOS = {
     'aff_prop': AffinityPropagation,
@@ -52,6 +61,10 @@ def get_score(predictions, labels, metrics):
             scores['rand_ind'] = rand_score(predictions, labels)
         elif metric == 'nmi':
             scores['nmi'] = normalized_mutual_info_score(predictions, labels)
+        elif metric == 'adj_rand_ind':
+            scores['adj_rand_ind'] = adjusted_rand_score(predictions, labels)
+        elif metric == 'adj_mi':
+            scores['adj_mi'] = adjusted_mutual_info_score(predictions, labels)
         else:
             raise ValueError('This metric is not supported!')
 
@@ -121,7 +134,8 @@ def plot_distributions(labels, predictions, algo, save_path):
 
 
 def eval_cluster_centers(df_orig, keys, data, cluster_centers, k=30):
-    """Get the original text for the k samples nearest to the cluster centers"""
+    """Get the original text for the k samples nearest to the cluster centers.
+    Does not work when clustering groups of attacks."""
 
     # a list to hold the lists of samples belonging to each cluster
     all_samples = []
@@ -171,58 +185,164 @@ if __name__ == '__main__':
     cmd_opt.add('--model', type=str, default='roberta', help="Name of target model for which the attacks were created.")
     cmd_opt.add('--dataset', type=str, default='sst', help="Name of dataset used to create the attacks.")
     cmd_opt.add('--cluster_algos', type=str, nargs='+', help="The clustering algorithms to try out.",
-                default=['aff_prop', 'agg_clust', 'birch', 'dbscan', 'kmeans', 'mean_shift', 'optics', 'spec_clust'])
+                default=['kmeans', 'aff_prop', 'birch', 'mean_shift'])
     cmd_opt.add('--features', type=str, default='btlc', help='feature groups to include: b, bt, btl, or btlc.')
     cmd_opt.add('--compress_features', type=int, default=0,
                 help='compress all features with more than one dimension down to have at most this many dimensions.')
-    cmd_opt.add('--metrics', type=str, nargs='+', default=['rand_ind', 'nmi'],
+    cmd_opt.add('--metrics', type=str, nargs='+', default=['rand_ind', 'nmi', 'adj_rand_ind', 'adj_mi'],
                 help="""The metrics used to score the cluster methods; the first metric
                 in the list is the one used to select the clustering methods\' hyperparameters.""")
     cmd_opt.add('--n', type=int, default=100, help="The number of attacks to keep per attack method.")
     cmd_opt.add('--in_dir', type=str,
                 help='The path to the folder containing the joblib files for the extracted samples.')
     cmd_opt.add('--out_dir', type=str, help='Where to save the results for this clustering experiment.')
+    cmd_opt.add('--siamese_net_dir', type=str,
+                help='the path to where the Siamese network AND the training sample keys AND scaler is saved')
+    cmd_opt.add('--use_reduced_attack_set', type=int, default=1,
+                help='boolean, if 1, only use attack methods in ATTACKS_CONSIDERED')
+    cmd_opt.add('--compress_with_siamese', type=int, default=1,
+                help='boolean, if 1, compress samples to be clustered using network')
+    cmd_opt.add('--group_size', type=int, default=1, help='size of the groups of samples to embed with the Siamese net')
     args = cmd_opt.parse_args()
 
     # create output directory
-    out_dir = os.path.join(args.out_dir, f"{args.model}_{args.dataset}_{args.features}_{args.compress_features}")
+    out_dir = os.path.join(args.out_dir, "cluster_{}_{}_{}_{}_{}".format(
+                               args.model, args.dataset, args.features, args.compress_features, int(time.time())))
     Path(out_dir).mkdir(parents=True, exist_ok=True)
+    output_file_handler = logging.FileHandler(os.path.join(out_dir, 'output.log'))
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    output_file_handler.setFormatter(formatter)
+    logger.addHandler(output_file_handler)
 
     # load the extracted feature data
-    logger.info(f'Clustering attacks for {args.model}/{args.dataset}.')
-    logger.info(f'Using the following algorithms: {args.cluster_algos}')
+    logger.info(f'Clustering attacks created for {args.model}/{args.dataset}.')
+    logger.info(f'Experiment arguments: {args}')
     s = time.time()
-    logger.info(f'Loading the data. Features: {args.features}')
-    dir_path = os.path.join(args.in_dir, 'extracted_features')  # , f'{args.model}_{args.dataset}')
+    logger.info(f'Features to load for each sample: {args.features}')
+    logger.info(f'Loading the data...')
+    dir_path = os.path.join(args.in_dir, 'extracted_features')
     samples, labels, keys, attack_counts = load_joblib_data(args.model, args.dataset, dir_path,
-                                                            args.compress_features, args.features)
+                                                            args.compress_features, args.features, logger)
     logger.info(f'Loaded the data. {time.time() - s:.2f}s.')
     logger.info(f'Attack counts: {attack_counts}')
 
-    # load original data containing strings and filter based on target model and dataset
-    df_orig = pd.read_csv(os.path.join(args.in_dir, 'original_data', 'whole_catted_dataset.csv'))
-    df_orig = df_orig[(df_orig.target_model == args.model) & (df_orig.target_model_dataset == args.dataset)]
-    logger.info(f'Loaded original textual data.')
+    # create dataframe from the samples and labels
+    df = pd.DataFrame(np.asarray(samples))  # np.asarray instead of np.array, because np.array copies data
+    df['label'] = labels.copy()
+    df['key'] = keys.copy()
+
+    # remove samples that aren't in new, smaller group
+    if args.use_reduced_attack_set:
+        df = df[df.label.isin(ATTACKS_CONSIDERED)]
+        logger.info(f'Removed all samples not produced by one of the following attack methods: {ATTACKS_CONSIDERED}')
+        logger.info(f'Attack counts now: {dict(df.label.value_counts())}')
+
+    # downsample for clustering efficiency
+    if args.n != 0:
+        df = downsample(df, args.n)
+        logger.info(f'Downsampled data so all classes have at most {args.n} samples.')
+        logger.info(f'Attack counts now: {dict(df.label.value_counts())}')
+    else:
+        logger.info(f'No downsampling performed.')
+
+    if args.compress_with_siamese:
+        # set device
+        device = torch.device(0 if torch.cuda.is_available() else 'cpu')
+
+        # load saved Siamese network
+        with open(os.path.join(args.siamese_net_dir, 'siamese_net_args.yml'), 'r') as infile:
+            net_args = yaml.safe_load(infile)
+            logger.info(f'Loaded Siamese network architecture args.')
+        net = SiameseNet(in_size=df.shape[1]-2, hid_size=net_args['hid_size'],
+                         out_size=net_args['out_size'], n_layer=net_args['n_layer'],
+                         drop_prob=net_args['drop_prob'], group_size=args.group_size)
+        net.load_state_dict(torch.load(os.path.join(args.siamese_net_dir, 'siamese_net.pt'), map_location=device))
+        net.to(device)
+        logger.info(f'Loaded saved model weights.')
+
+        # load the StandardScaler
+        siamese_scaler = joblib.load(os.path.join(args.siamese_net_dir, 'scaler.pkl'))
+        logger.info(f'Loaded fitted scaler.')
+
+        try:
+            # load training and validation set keys
+            train_keys = pd.read_csv(os.path.join(args.siamese_net_dir, 'train_keys.csv'))
+            val_keys = pd.read_csv(os.path.join(args.siamese_net_dir, 'val_keys.csv'))
+            used_keys = list(pd.concat([train_keys, val_keys])['key'])
+            logger.info(f'Loaded keys for samples that were used for training Siamese network.')
+
+            # filter out those samples in df that were used to train and validate the Siamese network
+            s = time.time()
+            to_drop = []
+            for i, row in df.iterrows():
+                if row['key'] in used_keys:
+                    to_drop.append(i)
+            df = df.drop(to_drop)
+            # couldn't get the below to work when the keys were in lists... stupid
+            # df = df[~df.key.isin(used_keys.key)].reset_index(drop=True)
+            logger.info(f'Removed samples that were used to train Siamese network. {time.time() - s:.2f}s')
+
+        except FileNotFoundError:
+            logger.info(f'Unable to load keys used for training so no data filtering was performed.')
+
+        # create normal dataset for feeding samples into network in groups
+        dataset_test = NormalDataset(df.copy(), group_size=args.group_size)
+        dataloader_test = DataLoader(dataset_test, batch_size=4, shuffle=False)
+
+        # compress the samples with one of the twins
+        embedded_groups = []
+        labels = []
+        s = time.time()
+        for batch_id, (x, y) in enumerate(dataloader_test, 1):
+
+            # if multiple samples in group, reshape inputs so that they can pass through network nicely
+            orig_shape = x.shape
+            if args.group_size > 1:
+                x = x.view(-1, orig_shape[-1])
+
+            # scale and pass through network
+            x = torch.Tensor(siamese_scaler.transform(x)).to(device)  # scale the samples
+            x_ = net.forward_one(x)  # embed the samples
+
+            # reshape inputs so that they can pass through network nicely
+            if args.group_size > 1:
+                x_ = x_.view(orig_shape[0], args.group_size, net.out_size)
+                x_ = x_.mean(dim=1)  # take mean of embedded samples within each group
+
+            embedded_groups.append(x_)
+            labels.append(y)
+
+        logger.info(f'Embedded all test set samples in groups. {time.time() - s:.2f}s')
+
+        # concatenate the samples
+        samples = torch.cat(embedded_groups, dim=0).detach().cpu().numpy()
+        labels = np.hstack(labels)
+        df = pd.DataFrame(samples)
+        df['label'] = labels.copy()
 
     # scale the data
     scaler = StandardScaler().fit(samples)
     samples = scaler.transform(samples)
 
-    # create dataframe from the samples and labels
-    df = pd.DataFrame(np.array(samples))
-    df['label'] = labels.copy()
-    df['key'] = keys.copy()
+    # TODO: visualize the groups and the cluster centers using t-SNE?
+    # TODO: actually do something with the held out attacks, e.g. visualize in cluster distributions
+    if not args.compress_with_siamese:
+        # load original data containing strings and filter based on target model and dataset
+        df_orig = pd.read_csv(os.path.join(args.in_dir, 'original_data', 'whole_catted_dataset.csv'))
+        df_orig = df_orig[(df_orig.target_model == args.model) & (df_orig.target_model_dataset == args.dataset)]
+        logger.info(f'Loaded original textual data.')
 
-    # downsample for clustering efficiency
-    if args.n != -1:
-        df = downsample(df, args.n)
+    # update labels and keys
     labels = list(df['label']).copy()
-    keys = list(df['key']).copy()
-    n_attack_methods = len(set(labels))
-    logger.info(f'Downsampled data so all classes have {args.n} samples.')
+    try:
+        keys = list(df['key']).copy()
+    except KeyError:
+        keys = None
+    logger.info(f'Attack labels: {set(labels)}')
+    n_attack_methods = len(set(labels))  # the total number of attack methods considered
 
     # create copy of data without the labels
-    data = df.drop(['label', 'key'], axis=1).copy()
+    data = df.drop(['label', 'key'], axis=1, errors='ignore').copy()
 
     # fit the specified clustering algorithms on the data
     logger.info(f'Fitting algorithms on the data.')
@@ -271,7 +391,7 @@ if __name__ == '__main__':
         logger.info(f'\tSaved predictions and labels and model file.')
 
         # get samples near cluster centers
-        if hasattr(clf.best_estimator_, 'cluster_centers_'):
+        if hasattr(clf.best_estimator_, 'cluster_centers_') and keys is not None:
             s = time.time()
             nearest_samples = eval_cluster_centers(df_orig, keys, data, clf.best_estimator_.cluster_centers_)
             np.save(os.path.join(out_dir, 'nearest_samples.npy'), nearest_samples)
