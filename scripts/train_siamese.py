@@ -355,16 +355,19 @@ if __name__ == '__main__':
     logger.info(f'Plotted loss curves. {time.time() - s:.2f}s')
 
     # ========== test embedding space nearest cluster center accuracy ==========
+    logger.info(f'Testing embedding space nearest cluster center accuracy ({len(set(labels))} classes)...')
     accuracies = []
     weighted_f1s = []
     for _ in range(100):
         x_train, x_test, y_train, y_test = train_test_split(data, labels, stratify=labels, test_size=.4)
 
+        # for each attack method, get the mean embedding
         label_to_cluster_center = {}
         for label in set(labels):
             cluster_center = x_train[y_train == label].mean(axis=0)  # get mean embedding for each attack method
             label_to_cluster_center[label] = cluster_center
 
+        # for each sample in the test set, find which mean embedding is closest
         preds = []
         for sample in x_test:
             min_dist = np.inf
@@ -399,29 +402,39 @@ if __name__ == '__main__':
     samples_novel = data[np.isin(labels, HELD_OUT_ATTACKS)]
     labels_novel = labels[np.isin(labels, HELD_OUT_ATTACKS)]
 
-    # repeat n times for higher confidence
+    logger.info(f'Using radii around known attack methods to test novel attack prediction (2 classes)...')
     threshold = .6  # this seems, empirically, to be the best threshold value
     accuracies = []
-    for _ in range(100):
+    for _ in range(100):  # repeat n times for higher confidence
         x_train, x_test_known, y_train, y_test_known = train_test_split(
             samples_known, labels_known, stratify=labels_known, test_size=len(samples_novel))
 
+        # put all novel attacks in the test set
         x_test = np.concatenate([x_test_known, samples_novel], axis=0)
         y_test = np.concatenate([y_test_known, labels_novel], axis=0)
 
         # get the mean embedding and radius that contains threshold proportion of samples for each attack method
         attack_mean_and_radius = {}
-        for known_attack in HELD_OUT_ATTACKS:
+        for known_attack in ELITE_ATTACKS:  # this WAS incorrectly (I think) set to HELD_OUT_ATTACKS
+
+            # get attacks in training set that were created by the known_attack attack method
             known_attack_samples = x_train[y_train == known_attack]
             if len(known_attack_samples) == 0:
                 continue
-            known_attack_mean_embedding = known_attack_samples.mean(axis=0)  # get mean embedding for each attack method
+            known_attack_mean_embedding = known_attack_samples.mean(axis=0)  # get mean embedding for this attack method
 
+            # build a radius around the mean embedding for each known attack
             radius = 0
             n_inside = 0
             while n_inside / len(known_attack_samples) < threshold:
+
+                # measure L2 distance of samples produced by the known attack to the mean embedding
                 distances = np.linalg.norm(known_attack_samples - known_attack_mean_embedding, axis=1)
+
+                # count how many of the distances are less than the current radius value
                 n_inside = np.sum(distances < radius)
+
+                # increase the radius
                 radius += np.std(distances) * .05
 
             attack_mean_and_radius[known_attack] = (known_attack_mean_embedding, radius)
@@ -432,7 +445,7 @@ if __name__ == '__main__':
             prediction = 'novel'
             for known_attack, (mean_embedding, radius) in attack_mean_and_radius.items():
                 if np.linalg.norm(sample - mean_embedding) < radius:
-                    prediction = 'known'
+                    prediction = 'known'  # if sample falls within ANY of the attack methods' radii, prediction = known
             predictions.append(prediction)
         predictions = np.array(predictions)
 
