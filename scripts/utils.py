@@ -1,5 +1,6 @@
 import joblib
 import os
+import random
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,7 +26,7 @@ FEATURES = {
 }
 
 
-def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbosity=0):
+def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbosity=0, keep_prob=.5):
     """
     Load all of the joblib files in dir_path. Each of the joblib
     files should contain the extracted features for attack instances
@@ -58,13 +59,18 @@ def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbo
             if verbosity > 0 and logger is not None:
                 logger.info('\tskipping!')
             continue
-        if 'nuclear' in filename or 'fnc1' in filename:
+        if dataset == 'wikipedia' and 'wikipedia_personal' in filename:
+            # prevent wikipedia personal samples from being loaded when wikipedia is the dataset
+            continue
+        if 'nuclear' in filename or 'fnc1' in filename or 'climate-change' in filename:  # skip these datasets
             continue
 
         instances = joblib.load(os.path.join(dir_path, filename))
 
         # load the information for one instance
         for num, instance in instances.items():
+            if keep_prob != 1 and random.random() > keep_prob:
+                continue
 
             # get the name of the attack that created this instance
             attack = instance['primary_key'][0]
@@ -96,7 +102,22 @@ def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbo
 
     # convert feature groups to numpy arrays
     for feature_name, feature_values in samples.items():
-        samples[feature_name] = np.vstack(feature_values)
+        try:
+            samples[feature_name] = np.vstack(feature_values)
+        except ValueError:
+            logger.info(f'Shape mismatches for feature name = {feature_name}')
+            shapes = {}
+            for i, sample in enumerate(feature_values):
+                if sample.shape not in shapes:
+                    shapes[sample.shape] = [1, {keys[i][4]: 1}]
+                else:
+                    shapes[sample.shape][0] += 1
+                    if keys[i][4] not in shapes[sample.shape][1]:
+                        shapes[sample.shape][1][keys[i][4]] = 1
+                    else:
+                        shapes[sample.shape][1][keys[i][4]] += 1
+
+            logger.info(f'Shapes counts: {shapes}')
 
     # if n_dims is not 0, compress number of dimensions for this feature group
     if n_dims != 0:
@@ -118,18 +139,21 @@ def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbo
     return samples, labels, keys, attack_counts
 
 
-def downsample(df, n=100):
+def downsample(df, n=100, cut_to_min_group=False):
     """Downsample dataset so all attacks have the
     same n samples"""
 
     # if n is None, downsample until all classes have same
     # number of instances as class with least samples
-    n = min(n, min(df.groupby('label').size()))
+    if cut_to_min_group:
+        n = min(n, min(df.groupby('label').size()))
 
     dfs = []
     for attack_name in df.label.unique():
-        new_df = df[df['label'] == attack_name].sample(n=n)
-        dfs.append(new_df)
+        df_ = df[df['label'] == attack_name]
+        if len(df_) > n:
+            df_ = df_.sample(n=n)
+        dfs.append(df_)
 
     df = pd.concat(dfs)
 
