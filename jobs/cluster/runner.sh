@@ -12,7 +12,13 @@ n=$4
 out_dir=$5
 features=$6
 n_dim=$7
-algos=('aff_prop' 'agg_clust' 'birch' 'dbscan' 'kmeans' 'mean_shift' 'optics' 'spec_clust')
+siamese_net_dir=$8
+reduced_set=$9
+compress_with_siamese=${10}
+group_size=${11}
+#algos=('aff_prop' 'agg_clust' 'birch' 'dbscan' 'kmeans' 'mean_shift' 'optics' 'spec_clust')
 
 python3 scripts/cluster.py --model $model --dataset $dataset --in_dir $in_dir --n $n \
-        --out_dir $out_dir --compress_features $n_dim --features $features --cluster_algos "${algos[@]}"
+        --out_dir $out_dir --compress_features $n_dim --features $features \
+        --siamese_net_dir $siamese_net_dir --use_reduced_attack_set $reduced_set \
+        --compress_with_siamese $compress_with_siamese  --group_size $group_size

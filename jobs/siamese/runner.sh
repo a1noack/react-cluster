@@ -2,6 +2,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --account=uoml
+#SBATCH --constraint=kepler
 module load miniconda
 conda activate textattack-0.2.11
 
@@ -14,11 +15,12 @@ lr=$6
 batch_size=$7
 hid_size=$8
 out_size=$9
-val=${10}
-n=${11}
-n_layer=${12}
-group_size=${13}
-held_out=('iga_wang' 'faster_genetic' 'genetic')
+n=${10}
+n_layer=${11}
+group_size=${12}
+where_to_avg=${13}
+max_epochs=${14}
+early_stop=${15}
 
 python3 scripts/train_siamese.py \
     --model $model \
@@ -30,9 +32,9 @@ python3 scripts/train_siamese.py \
     --batch_size $batch_size \
     --hid_size $hid_size \
     --out_size $out_size \
-    --select_on_val $val \
     --n $n \
     --n_layer $n_layer \
     --group_size $group_size \
-    --held_out "${held_out[@]}"
-
+    --where_to_avg $where_to_avg \
+    --max_epochs $max_epochs \
+    --early_stop $early_stop
