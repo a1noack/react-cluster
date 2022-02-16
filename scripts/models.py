@@ -36,17 +36,18 @@ class SiameseNet(nn.Module):
         return x
 
     # use this with BinaryCrossEntropy with Logits loss
-    def forward(self, x1, x2):
+    def forward(self, x1, x2, group_size=None):
+        group_size = self.group_size if group_size is None else group_size
         # do not use group loss
-        if self.group_size == 1:
+        if group_size == 1:
             out1 = self.forward_one(x1)
             out2 = self.forward_one(x2)
 
         # use group loss (assumes x1 and x2 have shape (batch_size, group_size, input_size)
         else:
             # pass through network and reshape
-            out1 = self.forward_one(x1).reshape(-1, self.group_size, self.out_size)
-            out2 = self.forward_one(x2).reshape(-1, self.group_size, self.out_size)
+            out1 = self.forward_one(x1).reshape(-1, group_size, self.out_size)
+            out2 = self.forward_one(x2).reshape(-1, group_size, self.out_size)
 
             # average across groups
             out1 = out1.mean(dim=1)  # shape should now be (batch_size, out_size)
@@ -55,7 +56,7 @@ class SiameseNet(nn.Module):
         # get the distance between the samples in the embedding space
         dist = torch.abs(out1 - out2)
         out = self.out(dist)
-        out = out if self.group_size > 1 else out.squeeze()
+        out = out if group_size > 1 else out.squeeze()
 
         return out
 
@@ -126,20 +127,28 @@ class SiameseDataset(Dataset):
 class NormalDataset(Dataset):
     """Returns a single sample and a label or a group of samples that
     were all produced by the same attack method and their label"""
-    def __init__(self, df, group_size=1, reuse_samples=False):
+
+    def __init__(self, df, group_size=1, reuse_samples=False, return_keys=False):
         self.labels = df['label'].values
+        self.keys = df['key'].values
         self.data = df.drop(['label', 'key'], axis=1, errors='ignore')
         self.group_size = group_size
         self.reuse_samples = reuse_samples
         self.used_idxs = []
+        self.return_keys = return_keys
 
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, idx):
+        """Returns x, the features for a single sample or a group of samples, y, the label for the
+        sample or group of samples, and keys, the key for the sample or set of keys for the samples
+        in the group"""
+
         # if not using groups of samples, just return one sample
         if self.group_size == 1:
             x, y = self.data.iloc[idx].values, self.labels[idx]  # y is a string; e.g. 'hotflip'
+            keys = [self.keys[idx]]
 
         # return a group of self.group_size samples
         else:
@@ -158,6 +167,10 @@ class NormalDataset(Dataset):
                 except ValueError:
                     raise StopIteration  # stop iterating if all samples have been used up
 
+            keys = [self.keys[idx] for idx in idxs1]
             x = self.data.iloc[idxs1].values
 
-        return x, y
+        if self.return_keys:
+            return x, y, keys
+        else:
+            return x, y
