@@ -13,10 +13,13 @@ import configargparse
 from lightgbm import LGBMClassifier
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, f1_score
+from scipy.stats import entropy
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.neighbors import LocalOutlierFactor as LOF
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
+# from sklearn.preprocessing import StandardScaler  # scaling isn't necessary for decision trees
+import yaml
 
 
 from utils import load_joblib_data, downsample
@@ -24,7 +27,10 @@ from utils import load_joblib_data, downsample
 
 # ATTACKS = ['hotflip', 'deepwordbug', 'textbugger', 'pruthi', 'clean', 'iga_wang', 'faster_genetic', 'genetic']
 ATTACKS = ['hotflip', 'deepwordbug', 'textbugger', 'pruthi', 'clean']
-NOVEL_ATTACKS = ['iga_wang', 'faster_genetic', 'genetic']
+NOVEL_ATTACKS = ['iga_wang', 'faster_genetic', 'genetic',
+                 'textbuggerv1', 'textbuggerv2', 'textbuggerv3', 'textbuggerv4',
+                 'pruthiv1', 'pruthiv2', 'pruthiv3', 'pruthiv4',
+                 'deepwordbugv1', 'deepwordbugv2', 'deepwordbugv3', 'deepwordbugv4']
 
 
 if __name__ == '__main__':
@@ -48,18 +54,23 @@ if __name__ == '__main__':
     cmd_opt.add('--novel_attacks', type=int, help='If 1, use novel attack methods IN ADDITION to base elite attacks')
     cmd_opt.add('--in_dir', type=str, default='data/',
                 help='The path to the folder containing the joblib files for the extracted samples.')
+    cmd_opt.add('--where_to_avg', type=str, default='input',
+                help='where to average the samples when group size > 1; either "embedding" or "input"')
+    cmd_opt.add('--novelty_prediction', type=int, default=0,
+                help='if 1, perform novelty prediction using output entropy.')
     cmd_opt.add('--out_dir', type=str, default='output/',
                 help='Where to save the results for this clustering experiment.')
     args = cmd_opt.parse_args()
 
     # create output directory
     out_dir = os.path.join(args.out_dir,
-                           "classify_{}_{}_{}_{}_{}".format(
+                           "classify_{}_{}_{}_{}_{}_nov_pred-{}".format(
                                args.model,
                                args.dataset,
                                args.features,
                                args.compress_features,
-                               args.novel_attacks
+                               args.novel_attacks,
+                               args.novelty_prediction
                            ))
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     output_file_handler = logging.FileHandler(os.path.join(out_dir, 'output.log'))
@@ -72,10 +83,9 @@ if __name__ == '__main__':
     s = time.time()
     logger.info(f'Loading the data. Features: {args.features}')
     dir_path = os.path.join(args.in_dir, 'extracted_features')  # , f'{args.model}_{args.dataset}')
-
     samples, labels, keys, attack_counts = load_joblib_data(args.model, args.dataset, dir_path,
-                                                            args.compress_features, args.features, logger)
-
+                                                            0, args.features, logger, keep_prob=.2,
+                                                            attacks=ATTACKS + NOVEL_ATTACKS)
     # remove attacks that aren't in new, smaller group
     if args.novel_attacks:
         attacks_to_use = ATTACKS + NOVEL_ATTACKS
@@ -94,11 +104,11 @@ if __name__ == '__main__':
     # logger.info(f'Loaded original textual data.')
 
     # scale the data
-    scaler = StandardScaler()
+    # scaler = StandardScaler()
     samples = np.array(new_samples)
 
     # average samples in the input space
-    if args.group_size > 1:
+    if args.group_size > 1 and args.where_to_avg == 'input':
         samples_avg = []
         labels_avg = []
         for attack in set(new_labels):
@@ -136,6 +146,17 @@ if __name__ == '__main__':
 
     # build stratified train and test splits
     X_train, X_test, y_train, y_test = train_test_split(df, labels, test_size=.2, stratify=labels)
+    X_train, X_test = X_train.reset_index(drop=True), X_test.reset_index(drop=True)
+    y_train, y_test = np.array(y_train), np.array(y_test)
+    # TODO: make representation of novel attacks 1/k
+
+    # remove novel attacks from the training set
+    if args.novelty_prediction:
+        mask = np.isin(y_train, ATTACKS)
+        X_train = X_train[mask]
+        y_train = list(np.array(y_train)[mask])
+        logger.info(f'Training set set of labels = {set(y_train)}')
+        logger.info(f'Test set set of labels = {set(y_test)}')
 
     # fit the specified clustering algorithms on the data
     logger.info(f'Fitting classifier on the data.')
@@ -144,30 +165,152 @@ if __name__ == '__main__':
                   'max_depth': [3, 5],
                   'num_leaves': [2, 15],
                   'boosting_type': ['gbdt']}
-    pipeline = make_pipeline(scaler, clf)
-    clf = GridSearchCV(estimator=clf, param_grid=param_grid, cv=3, verbose=3)
+    # pipeline = make_pipeline(scaler, clf)
+    clf = GridSearchCV(estimator=clf, param_grid=param_grid, cv=3, verbose=3)  # this was taking clf in the estimator parameter, so scaling wasn't happening
 
     # perform grid search
     s = time.time()
     clf.fit(X_train, y_train)
     logger.info(f'\tFinished fitting. {time.time() - s:.2f}s')
 
-    y_test_pred = clf.predict(X_test)
-    acc = accuracy_score(y_test, y_test_pred)
-    logger.info(f'Test set accuracy: {acc:.4f}')
-    weighted_f1 = f1_score(y_test, y_test_pred, average='weighted')  # get weighted F1 score
-    logger.info(f'Test set weighted F1 = {weighted_f1:.4f}')
-    counts = np.unique(y_test, return_counts=True)  # get attack counts
-    counts_dict = dict(zip(list(counts[0]), list(counts[1])))
-    logger.info(f'Attack counts for test set: {counts_dict}')
-    with open(os.path.join(out_dir, 'scores.csv'), 'w') as f:
-        f.write(f'Accuracy = {acc:.4f}\n')
-        f.write(f'Weighted F1 score = {weighted_f1:.4f}\n')
-        f.write(f'Attack counts dictionary = {counts_dict}\n')
-    logger.info(f'Saved accuracy and F1 scores to file.')
+    if args.where_to_avg == 'input' and not args.novelty_prediction:
+        y_test_pred = clf.predict(X_test)
+        acc = accuracy_score(y_test, y_test_pred)
+        logger.info(f'Test set accuracy: {acc:.4f}')
+        weighted_f1 = f1_score(y_test, y_test_pred, average='weighted')  # get weighted F1 score
+        logger.info(f'Test set weighted F1 = {weighted_f1:.4f}')
+        counts = np.unique(y_test, return_counts=True)  # get attack counts
+        counts_dict = dict(zip(list(counts[0]), list(counts[1])))
+        logger.info(f'Attack counts for test set: {counts_dict}')
+        with open(os.path.join(out_dir, 'scores.csv'), 'w') as f:
+            f.write(f'Accuracy = {acc:.4f}\n')
+            f.write(f'Weighted F1 score = {weighted_f1:.4f}\n')
+            f.write(f'Attack counts dictionary = {counts_dict}\n')
+        logger.info(f'Saved accuracy and F1 scores to file.')
 
-    # # save predictions, labels, and model
+    elif args.where_to_avg == 'output' and args.novelty_prediction:
+        y_test_probs = clf.predict_proba(X_test)
+        logger.info(f'y_test_probs.shape = {y_test_probs.shape}')
+        y_test_copy = y_test.copy()
+
+        # generate group predictions
+        scores_dict = {}
+        group_entavgs = []
+        group_avgents = []
+        for i in range(len(y_test)):
+            current_class = y_test[i]  # get sample's class
+            class_probs = y_test_probs[y_test == current_class]  # get only those predictions for the current_class
+            group_probs = class_probs[np.random.randint(len(class_probs), size=args.group_size)]  # randomly sample
+
+            # calculate entropy for group by averaging predictions and getting entropy of average
+            group_probs_avg = group_probs.mean(axis=0)
+            assert group_probs_avg.shape[-1] == y_test_probs.shape[-1], f'Shapes not matching! {group_probs_avg.shape}'
+            group_entavg = entropy(group_probs_avg, base=len(set(y_test)))
+            assert group_entavg <= 1, f'Entropy is greater than one! {group_entavg}'
+
+            # calculate entropy for group by averaging the entropies of all of the individual predictions in the group
+            group_avgent = entropy(group_probs, axis=1, base=len(set(y_test))).mean()
+            assert group_avgent <= 1, f'Entropy is greater than one! {group_avgent}'
+
+            group_entavgs.append(group_entavg)
+            group_avgents.append(group_avgent)
+        group_entavgs = np.array(group_entavgs)
+        group_avgents = np.array(group_avgents)
+
+        # convert labels seen at training time into 'known'
+        np.save(os.path.join(out_dir, 'y_test_orig.npy'), y_test)
+        y_test_kno_v_unk = np.where(np.isin(y_test, ATTACKS), 'known', y_test)
+        np.save(os.path.join(out_dir, 'y_test_kno_v_unk.npy'), y_test_kno_v_unk)
+
+        # get AUROC for each attack
+        for attack in NOVEL_ATTACKS:
+            if attack == 'known' or attack not in set(y_test_kno_v_unk):
+                continue
+            group_entavgs_subset = group_entavgs[np.isin(y_test_kno_v_unk, ['known', attack])]
+            group_avgents_subset = group_avgents[np.isin(y_test_kno_v_unk, ['known', attack])]
+            y_test_subset = y_test_kno_v_unk[np.isin(y_test_kno_v_unk, ['known', attack])]
+            is_novel = np.where(y_test_subset == 'known', 0, 1)
+
+            auroc_entavgs = float(roc_auc_score(is_novel, group_entavgs_subset))
+            auroc_avgents = float(roc_auc_score(is_novel, group_avgents_subset))
+
+            scores_dict[attack] = [auroc_entavgs, auroc_avgents]
+
+            logger.info(f'\t{attack} AUROC (ent. of avg.) = {auroc_entavgs:.4f}, (avg. of ent.) = {auroc_avgents:.4f}')
+
+        # write scores to file
+        with open(os.path.join(out_dir, 'scores.yml'), 'w') as outfile:
+            yaml.dump(scores_dict, outfile, default_flow_style=False)
+
+        # save predictions and entropies to files
+        np.save(os.path.join(out_dir, 'y_test_probs.npy'), y_test_probs)
+        np.save(os.path.join(out_dir, 'group_entavgs.npy'), group_entavgs)
+        np.save(os.path.join(out_dir, 'group_avgents.npy'), group_avgents)
+
+        # get test set accuracy numbers on known attacks
+        X_test_subset = X_test[np.isin(y_test_copy, ATTACKS)]
+        y_test_subset = y_test_copy[np.isin(y_test_copy, ATTACKS)]
+        y_test_pred = clf.predict(X_test_subset)
+        acc = accuracy_score(y_test_subset, y_test_pred)
+        logger.info(f'Test set accuracy: {acc:.4f}')
+        weighted_f1 = f1_score(y_test_subset, y_test_pred, average='weighted')  # get weighted F1 score
+        logger.info(f'Test set weighted F1 = {weighted_f1:.4f}')
+        counts = np.unique(y_test_subset, return_counts=True)  # get attack counts
+        counts_dict = dict(zip(list(counts[0]), list(counts[1])))
+        logger.info(f'Attack counts for test set: {counts_dict}')
+        with open(os.path.join(out_dir, 'scores.csv'), 'w') as f:
+            f.write(f'Accuracy = {acc:.4f}\n')
+            f.write(f'Weighted F1 score = {weighted_f1:.4f}\n')
+            f.write(f'Attack counts dictionary = {counts_dict}\n')
+        logger.info(f'Saved accuracy and F1 scores to file.')
+
+    if args.novelty_prediction:
+
+        # ========== DO NOVELTY PREDICTION USING LOF ==========
+
+        lof = LOF(novelty=True)  # novelty detection needs to be set to True
+        lof.fit(X_train)
+
+        # logger.info(f'X_test.shape = {X_test.shape}')
+        y_score = lof.decision_function(X_test)  # # large values correspond to inliers
+        y_score = -y_score  # flip so that large values are outliers
+        y_score = (y_score - y_score.min()) / (y_score.max() - y_score.min())  # scale between zero and one
+        # logger.info(f'y_score.shape = {y_score.shape}')
+        # logger.info(f'y_test.shape = {y_test.shape}')
+
+        # get individual AUROC per novel attack
+        # logger.info(f'y_test = {y_test}')
+        logger.info(f'LOF AUROCs:')
+        scores_dict = {}
+        for novel_attack in NOVEL_ATTACKS:
+            try:
+                y_score_subset = y_score[np.isin(y_test, ATTACKS + [novel_attack])]
+                # logger.info(f'y_score_subset.shape = {y_score_subset.shape}')
+                y_true_subset = y_test[np.isin(y_test, ATTACKS + [novel_attack])]
+                # logger.info(f'y_true_subset.shape = {y_true_subset.shape}')
+                y_true_subset = np.where(np.isin(y_true_subset, NOVEL_ATTACKS), 1, 0)  # 1 => novel, 0 => known
+                # logger.info(f'y_true_subset.shape = {y_true_subset.shape}')
+
+                auroc = roc_auc_score(np.array(y_true_subset), y_score_subset)
+                logger.info(f'\t{novel_attack} AUROC = {auroc:.4f}')
+                scores_dict[novel_attack] = float(auroc)
+            except ValueError as e:
+                logger.info(f'Error {e}')
+                logger.info(f'Only one class present in y_true for {novel_attack}.')
+
+        # write scores to file
+        with open(os.path.join(out_dir, 'lof_scores.yml'), 'w') as outfile:
+            yaml.dump(scores_dict, outfile, default_flow_style=False)
+
+    # save model to file
     joblib.dump(clf, os.path.join(out_dir, f'lgbm.mdl'))
     logger.info(f'\tSaved model file.')
+
+    # save training and testing data
+    np.save(os.path.join(out_dir, 'X_train.npy'), X_train)
+    np.save(os.path.join(out_dir, 'y_train.npy'), y_train)
+    np.save(os.path.join(out_dir, 'X_test.npy'), X_test)
+    np.save(os.path.join(out_dir, 'y_test.npy'), y_test)
+    logger.info(f'Saved training/testing data to file')
 
     logger.info(f'DONE.')
