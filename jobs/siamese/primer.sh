@@ -18,7 +18,7 @@ partition=${16}
 
 in_dir="data/"
 out_dir="output/"
-job_name="Si_${model}_${dataset}_${lr}_${batch_size}_${hid_size}_${out_size}_${n_layer}_${group_size}"
+job_name="Si_${model}_${dataset}_${features}_${lr}_${batch_size}_${hid_size}_${out_size}_${n_layer}_${group_size}"
 
 
 sbatch --mem=${mem}G \
