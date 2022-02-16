@@ -22,16 +22,28 @@ FEATURES = {
     'b': BERT_FEATS,
     'bt': BERT_FEATS + TEXT_FEATS,
     'btl': BERT_FEATS + TEXT_FEATS + LANG_FEATS,
-    'btlc': BERT_FEATS + TEXT_FEATS + LANG_FEATS + CLF_FEATS
+    'btlc': BERT_FEATS + TEXT_FEATS + LANG_FEATS + CLF_FEATS,
+    'c': CLF_FEATS
+}
+
+DATASET_GROUPS = {
+    'abuse': ['wikipedia', 'hatebase', 'civil_comments'],
+    'sentiment': ['climate-change_waterloo', 'imdb', 'sst'],
+    'all': ['wikipedia', 'hatebase', 'civil_comments', 'climate-change_waterloo', 'imdb', 'sst']
 }
 
 
-def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbosity=0, keep_prob=.5):
+def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbosity=0,
+                     keep_prob=.45, attacks=None, use_variants=True):
     """
     Load all of the joblib files in dir_path. Each of the joblib
     files should contain the extracted features for attack instances
     for one target model / domain dataset / attack method combination.
     """
+
+    # have keep prob be large if we are only dealing with single datasets
+    # if dataset not in DATASET_GROUPS:
+    #     keep_prob = 1.0
 
     # create containers
     samples = {}
@@ -48,24 +60,49 @@ def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbo
             thresh += inc
         first_sample = True
 
-        # only load those joblib files for the specified model and dataset
-        if verbosity > 0 and logger is not None:
-            logger.info(filename)
+        # only load those joblib files for the specified model
         if model not in filename and model != 'all':
-            if verbosity > 0 and logger is not None:
-                logger.info('\tskipping!')
             continue
-        if dataset not in filename and dataset != 'all':
-            if verbosity > 0 and logger is not None:
-                logger.info('\tskipping!')
-            continue
+
+        # filter based on dataset
+        if dataset not in filename:
+            if dataset in DATASET_GROUPS:
+                # check to see if dataset is in group of datasets
+                included = False
+                for d in DATASET_GROUPS[dataset]:
+                    if d in filename:
+                        included = True
+                if not included:
+                    continue
+            else:
+                continue
         if dataset == 'wikipedia' and 'wikipedia_personal' in filename:
             # prevent wikipedia personal samples from being loaded when wikipedia is the dataset
             continue
-        if 'nuclear' in filename or 'fnc1' in filename or 'climate-change' in filename:  # skip these datasets
+        if dataset in ['all', 'abuse', 'sentiment'] and 'climate-change' in filename:
+            # if using multiple domain datasets to train, don't inlcude climate-change because of different TM shapes
+            continue
+        if 'nuclear' in filename or 'fnc1' in filename:
+            # skip these deprecated datasets
             continue
 
-        instances = joblib.load(os.path.join(dir_path, filename))
+        # filter based on attacks
+        if attacks is not None and dataset != "hatebase":  # ALL hatebase attacks are in one joblib file per tgt. model
+            # check to see if this attack is included
+            included = False
+            for a in attacks:
+                if a in filename:
+                    included = True
+            if not included:
+                continue
+        if not use_variants:
+            if 'v1' in filename or 'v2' in filename or 'v3' in filename:
+                continue
+
+        try:
+            instances = joblib.load(os.path.join(dir_path, filename))
+        except ValueError:
+            logger.info(f'Error reading file with filename: {filename}')
 
         # load the information for one instance
         for num, instance in instances.items():
@@ -87,6 +124,8 @@ def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbo
                     if verbosity > 0 and logger is not None and first_sample:
                         logger.info(f'\t{feature_name}: {feature_values.shape[1]}')
                     feature_values = feature_values.flatten()
+                    if feature_name == 'tm_posterior' and len(feature_values) > 1:
+                        feature_values = np.array([feature_values[-1]])
                     if feature_name in samples:
                         samples[feature_name].append(feature_values)
                     else:
@@ -98,7 +137,7 @@ def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbo
             keys.append(instance['primary_key'])
 
     # make sure all 11 attacks included
-    assert len(set(labels)) in [11, 12], f"Only found joblib files for {len(set(labels))} attacks!"
+    # assert len(set(labels)) in [11, 12], f"Only found joblib files for {len(set(labels))} attacks!"
 
     # convert feature groups to numpy arrays
     for feature_name, feature_values in samples.items():
@@ -201,6 +240,7 @@ def plot_tsne(data, labels, out_dir, ppl=20):
                'hotflip': 'red',
                'iga_wang': 'black',
                'faster_genetic': 'magenta',
+               'textbugger': 'violet',
                'pruthiv1': "yellow",
                'pruthiv2': 'blue',
                'pruthiv3': 'cyan',
