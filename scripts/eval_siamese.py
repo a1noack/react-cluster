@@ -157,10 +157,12 @@ if __name__ == '__main__':
     embedded_groups = []
     non_embedded_groups = []
     non_embedded_labels = []
+    non_embedded_group_no = []
+    embedded_group_nos = []
     labels = []
     keys = []
     s = time.time()
-    for batch_id, (x, y, k) in enumerate(dataloader_test, 1):
+    for batch_id, (x, y, k) in enumerate(dataloader_test):  # this WAS starting at 1
         # logger.info(f'x.shape = {x.shape}')
 
         # if multiple samples in group, reshape inputs so that they can pass through network nicely
@@ -168,7 +170,8 @@ if __name__ == '__main__':
         if args.group_size > 1:
             x = x.view(-1, orig_shape[-1])  # x's shape after this line should be (group_size, n_features)
             non_embedded_groups.append(x)
-            non_embedded_labels.append(np.array([y]*x.shape[0]))
+            non_embedded_labels.append(np.array([y]*x.shape[0]).flatten())  # we weren't flattening before
+            non_embedded_group_no.append(np.array([batch_id]*x.shape[0]))
 
         # scale and pass through network
         x = torch.Tensor(siamese_scaler.transform(x)).to(device)  # scale the samples
@@ -182,6 +185,7 @@ if __name__ == '__main__':
         embedded_groups.append(x_)
         labels.append(y)
         keys.append(k)
+        embedded_group_nos.append(batch_id)
 
     logger.info(f'Embedded all remaining samples in groups. {time.time() - s:.2f}s')
 
@@ -191,9 +195,6 @@ if __name__ == '__main__':
     samples = torch.cat(embedded_groups, dim=0).detach().cpu().numpy()
     labels = np.hstack(labels)
     keys = np.array(keys)
-
-    unemb_samples = torch.cat(non_embedded_groups).detach().cpu().numpy()
-    unemb_labels = np.hstack(non_embedded_labels)
 
     # save these for the demo
     torch.save(samples, os.path.join(out_dir, 'group_samples.pt'))
@@ -211,6 +212,8 @@ if __name__ == '__main__':
     s = time.time()
     df = pd.DataFrame(samples)
     df['label'] = labels.copy()
+    # df['group_no'] = list(range(len(df)))
+    df['group_no'] = embedded_group_nos
     # df['key'] = keys
 
     # remove variants from the "training data"
@@ -223,19 +226,37 @@ if __name__ == '__main__':
     # split into x and y
     # df_x_train, y_train, keys_train = df_train.drop(['label', 'key'], axis=1), df_train['label'], df_train['key']
     # df_x_test, y_test, keys_test = df_test.drop(['label', 'key'], axis=1), df_test['label'], df_test['key']
-    df_x_train, y_train = df_train.drop(['label'], axis=1), df_train['label']
-    df_x_test, y_test = df_test.drop(['label'], axis=1), df_test['label']
+    df_x_train, y_train, group_no_train = df_train.drop(['label', 'group_no'], axis=1), df_train['label'], df_train['group_no']
+    df_x_test, y_test, group_no_test = df_test.drop(['label', 'group_no'], axis=1), df_test['label'], df_test['group_no']
 
     logger.info(f'Split into train and test sets. {time.time() - s:.2f}s')
 
     # ========== TRAIN LGBM CLASSIFIER ON KNOWN ATTACKS AND EVAL ENTROPY ON NOVEL ATTACKS ==========
 
-    df = pd.DataFrame(unemb_samples)
+    unemb_samples = torch.cat(non_embedded_groups).detach().cpu().numpy()
+    unemb_labels = np.hstack(non_embedded_labels)  # we had a .flatten() here and this was vstack before
+    unemb_group_no = np.hstack(non_embedded_group_no)
 
-    un_df_x_train, un_df_x_test, un_y_train, un_y_test = train_test_split(df, unemb_labels,
-                                                                          test_size=.2, stratify=unemb_labels)
-    un_df_x_train, un_df_x_test = un_df_x_train.reset_index(drop=True), un_df_x_test.reset_index(drop=True)
-    un_y_train, un_y_test = np.array(un_y_train), np.array(un_y_test)
+    logger.info(f'unemb_samples.shape = {unemb_samples.shape}')
+    logger.info(f'unemb_labels.shape = {unemb_labels.shape}')
+    logger.info(f'unemb_group_no.shape = {unemb_group_no.shape}')
+
+    df = pd.DataFrame(unemb_samples)
+    df['group_no'] = unemb_group_no
+    df['label'] = unemb_labels
+
+    # un_df_x_train, un_df_x_test, un_y_train, un_y_test = train_test_split(df, unemb_labels,
+    #                                                                       test_size=.2, stratify=unemb_labels)
+    # un_df_x_train, un_df_x_test = un_df_x_train.reset_index(drop=True), un_df_x_test.reset_index(drop=True)
+    # un_y_train, un_y_test = np.array(un_y_train), np.array(un_y_test)
+    un_df_train = df[df.group_no.isin(list(group_no_train))]
+    un_df_test = df[df.group_no.isin(list(group_no_test))]
+    un_df_x_train, un_y_train = un_df_train.drop(['label', 'group_no'], axis=1), np.array(un_df_train['label'])
+    un_df_x_test, un_y_test = un_df_test.drop(['label', 'group_no'], axis=1), np.array(un_df_test['label'])
+    unemb_group_no_test = np.array(un_df_test['group_no'])
+    logger.info(f'unemb_group_no_test.shape = {unemb_group_no_test.shape}')
+    logger.info(f'un_y_train labels: {set(un_y_train)}')
+    logger.info(f'un_y_test labels: {set(un_y_test)}')
 
     # fit the specified clustering algorithms on the data
     logger.info(f'Fitting classifier on the data.')
@@ -261,10 +282,22 @@ if __name__ == '__main__':
     scores_dict = {}
     group_entavgs = []
     group_avgents = []
-    for i in range(len(y_test_copy)):
-        current_class = y_test_copy[i]  # get sample's class
-        class_probs = y_test_probs[y_test_copy == current_class]  # get only those predictions for the current_class
-        group_probs = class_probs[np.random.randint(len(class_probs), size=args.group_size)]  # randomly sample
+    group_classes = []
+    group_numbers = []
+    # for i in range(len(y_test_copy)):
+    for group_no in set(un_df_test['group_no']):
+        logger.info(f'group_no = {group_no}')
+        # current_class = y_test_copy[i]  # get sample's class
+        # class_probs = y_test_probs[y_test_copy == current_class]  # get only those predictions for the current_class
+        # group_probs = class_probs[np.random.randint(len(class_probs), size=args.group_size)]  # randomly sample
+
+        # group_idxs = list(group_no_test[group_no_test == group_no].index)  # get the indices for this group
+        group_idxs = list(np.argwhere(unemb_group_no_test == group_no).flatten())  # get the indices for this group
+        logger.info(f'group_idxs = {group_idxs}')
+        group_probs = y_test_probs[group_idxs]  # get the prediction probabilities for this group
+        logger.info(f'group_probs.shape = {group_probs.shape}')
+        current_class = y_test_copy[group_idxs[0]]  # get the class for this group (the first sample in the group)
+        logger.info(f'current_class = {current_class}')
 
         # calculate entropy for group by averaging predictions and getting entropy of average
         group_probs_avg = group_probs.mean(axis=0)
@@ -278,12 +311,17 @@ if __name__ == '__main__':
 
         group_entavgs.append(group_entavg)
         group_avgents.append(group_avgent)
+        group_classes.append(current_class)
+        group_numbers.append(group_no)
     group_entavgs = np.array(group_entavgs)
     group_avgents = np.array(group_avgents)
+    group_classes = np.array(group_classes)
+    group_numbers = np.array(group_numbers)
 
     # convert labels seen at training time into 'known'
     np.save(os.path.join(out_dir, 'y_test_orig.npy'), y_test_copy)
-    y_test_kno_v_unk = np.where(np.isin(y_test_copy, ATTACKS_CONSIDERED), 'known', y_test_copy)
+    # y_test_kno_v_unk = np.where(np.isin(y_test_copy, ATTACKS_CONSIDERED), 'known', y_test_copy)  # originally used
+    y_test_kno_v_unk = np.where(np.isin(group_classes, ATTACKS_CONSIDERED), 'known', group_classes)
     np.save(os.path.join(out_dir, 'y_test_kno_v_unk.npy'), y_test_kno_v_unk)
 
     # get AUROC for each attack
@@ -310,6 +348,8 @@ if __name__ == '__main__':
     np.save(os.path.join(out_dir, 'y_test_probs.npy'), y_test_probs)
     np.save(os.path.join(out_dir, 'group_entavgs.npy'), group_entavgs)
     np.save(os.path.join(out_dir, 'group_avgents.npy'), group_avgents)
+    np.save(os.path.join(out_dir, 'group_classes.npy'), group_classes)
+    np.save(os.path.join(out_dir, 'group_numbers.npy'), group_numbers)
 
     # get test set accuracy numbers on known attacks
     X_test_subset = un_df_x_test[np.isin(y_test_copy, ATTACKS_CONSIDERED)]
@@ -387,6 +427,7 @@ if __name__ == '__main__':
             # filter out those attacks produced by novel attacks that aren't "novel_attack"
             df_x_test_subset = df_x_test[y_test.isin(ATTACKS_CONSIDERED + [novel_attack])]
             y_test_subset = y_test[y_test.isin(ATTACKS_CONSIDERED + [novel_attack])]
+            group_nos = group_no_test[y_test.isin(ATTACKS_CONSIDERED + [novel_attack])]
             # keys_test_subset = keys_test[y_test.isin(ATTACKS_CONSIDERED + [novel_attack])]
 
             # for each sample in the test set, see how close it is (in percentile terms) to each mean embedding
@@ -433,6 +474,7 @@ if __name__ == '__main__':
             closest_attacks = np.array(closest_attacks)
             closest_attacks_dists = np.array(closest_attacks_dists)
             smallest_distances = np.array(smallest_distances)
+            group_nos = np.array(group_nos)
             # keys_to_save = np.array(keys_to_save)
 
             # save outputs for this novel attack
@@ -441,6 +483,7 @@ if __name__ == '__main__':
             np.save(os.path.join(out_dir, f'closest_attacks_{novel_attack}.npy'), closest_attacks)
             np.save(os.path.join(out_dir, f'closest_attacks_dists_{novel_attack}.npy'), closest_attacks_dists)
             np.save(os.path.join(out_dir, f'smallest_distances_{novel_attack}.npy'), smallest_distances)
+            np.save(os.path.join(out_dir, f'group_numbers_{novel_attack}.npy'), group_nos)
             # np.save(os.path.join(out_dir, f'keys_to_save_{novel_attack}.npy'), keys_to_save)
 
             # compute AUROC for this novel attack
