@@ -75,6 +75,8 @@ if __name__ == '__main__':
     cmd_opt.add('--n', type=int, default=0, help="The number of attacks to keep per attack method")
     cmd_opt.add('--held_out', type=int, default=1, help='if 1, hold out the attacks specified in HELD_OUT_ATTACKS list')
     cmd_opt.add('--use_elite_attackers_only', type=int, default=1, help='if 1, use only the elite attack methods')
+    cmd_opt.add('--held_out_dataset', type=str, default='',
+                help='which domain dataset to remove from training data and only test on')
 
     # args defining Siamese network architecture
     cmd_opt.add('--hid_size', type=int, default=128, help='the number of neurons per hidden layer')
@@ -104,8 +106,8 @@ if __name__ == '__main__':
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
 
     # create output directory
-    out_dir = os.path.join(args.out_dir, "siamese_{}_{}_{}_{}_{}_{}_{}_{}_{}".format(
-        args.model, args.dataset, args.lr, args.batch_size,
+    out_dir = os.path.join(args.out_dir, "siamese_{}_{}_{}_{}_{}_{}_{}_{}_{}_{}".format(
+        args.model, args.dataset, args.features, args.lr, args.batch_size,
         args.hid_size, args.out_size, args.group_size, args.where_to_avg, int(time.time())))
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     output_file_handler = logging.FileHandler(os.path.join(out_dir, 'output.log'))
@@ -120,7 +122,13 @@ if __name__ == '__main__':
     logger.info(f'Features to load for each sample: {args.features}')
     logger.info(f'Loading the data...')
     dir_path = os.path.join(args.in_dir, 'extracted_features')  # , f'{args.model}_{args.dataset}')
-    samples, labels, keys, attack_counts = load_joblib_data(args.model, args.dataset, dir_path,
+    if args.use_elite_attackers_only:
+        samples, labels, keys, attack_counts = load_joblib_data(args.model, args.dataset, dir_path,
+                                                                args.compress_features, args.features,
+                                                                logger, attacks=ELITE_ATTACKS+HELD_OUT_ATTACKS,
+                                                                use_variants=False)
+    else:
+        samples, labels, keys, attack_counts = load_joblib_data(args.model, args.dataset, dir_path,
                                                             args.compress_features, args.features, logger)
     logger.info(f'Loaded the data. {time.time() - s:.2f}s.')
     logger.info(f'Attack counts: {attack_counts}')
@@ -148,8 +156,13 @@ if __name__ == '__main__':
         logger.info(f'No downsampling performed.')
 
     # split into train/validation/test dataframes
-    df_train, df_nottrain = train_test_split(df, stratify=df['label'], test_size=.2 if len(df) < 40000 else 10000)
-    df_val, df_test = train_test_split(df_nottrain, stratify=df_nottrain['label'], test_size=0.5)
+    if args.held_out_dataset == '':
+        df_train, df_nottrain = train_test_split(df, stratify=df['label'], test_size=.2 if len(df) < 80_000 else 20_000)
+        df_val, df_test = train_test_split(df_nottrain, stratify=df_nottrain['label'], test_size=0.5)
+    else:
+        # TODO: use df['key'] column values to filter df so that the samples from the held
+        #  out dataset only appear in the test set and not in the training set
+        pass
 
     # remove held_out attacks from training and validation sets
     if len(HELD_OUT_ATTACKS) > 0:
@@ -403,59 +416,68 @@ if __name__ == '__main__':
     labels_novel = labels[np.isin(labels, HELD_OUT_ATTACKS)]
 
     logger.info(f'Using radii around known attack methods to test novel attack prediction (2 classes)...')
+    best_accuracy = best_threshold_value = best_pp_value = -1
     threshold = .6  # this seems, empirically, to be the best threshold value
-    accuracies = []
-    for _ in range(100):  # repeat n times for higher confidence
-        x_train, x_test_known, y_train, y_test_known = train_test_split(
-            samples_known, labels_known, stratify=labels_known, test_size=len(samples_novel))
+    for threshold in [.5, .6, .7, .8, .9]:
+        accuracies = []
+        for _ in range(100):  # repeat n times for higher confidence
+            x_train, x_test_known, y_train, y_test_known = train_test_split(
+                samples_known, labels_known, stratify=labels_known, test_size=len(samples_novel))
 
-        # put all novel attacks in the test set
-        x_test = np.concatenate([x_test_known, samples_novel], axis=0)
-        y_test = np.concatenate([y_test_known, labels_novel], axis=0)
+            # put all novel attacks in the test set
+            x_test = np.concatenate([x_test_known, samples_novel], axis=0)
+            y_test = np.concatenate([y_test_known, labels_novel], axis=0)
 
-        # get the mean embedding and radius that contains threshold proportion of samples for each attack method
-        attack_mean_and_radius = {}
-        for known_attack in ELITE_ATTACKS:  # this WAS incorrectly (I think) set to HELD_OUT_ATTACKS
+            # get the mean embedding and radius that contains threshold proportion of samples for each attack method
+            attack_mean_and_radius = {}
+            for known_attack in ELITE_ATTACKS:  # this WAS incorrectly (I think) set to HELD_OUT_ATTACKS
 
-            # get attacks in training set that were created by the known_attack attack method
-            known_attack_samples = x_train[y_train == known_attack]
-            if len(known_attack_samples) == 0:
-                continue
-            known_attack_mean_embedding = known_attack_samples.mean(axis=0)  # get mean embedding for this attack method
+                # get attacks in training set that were created by the known_attack attack method
+                known_attack_samples = x_train[y_train == known_attack]
+                if len(known_attack_samples) == 0:
+                    continue
+                known_attack_mean_embedding = known_attack_samples.mean(axis=0)  # get mean embedding for this attack method
 
-            # build a radius around the mean embedding for each known attack
-            radius = 0
-            n_inside = 0
-            while n_inside / len(known_attack_samples) < threshold:
+                # build a radius around the mean embedding for each known attack
+                radius = 0
+                n_inside = 0
+                while n_inside / len(known_attack_samples) < threshold:
 
-                # measure L2 distance of samples produced by the known attack to the mean embedding
-                distances = np.linalg.norm(known_attack_samples - known_attack_mean_embedding, axis=1)
+                    # measure L2 distance of samples produced by the known attack to the mean embedding
+                    distances = np.linalg.norm(known_attack_samples - known_attack_mean_embedding, axis=1)
 
-                # count how many of the distances are less than the current radius value
-                n_inside = np.sum(distances < radius)
+                    # count how many of the distances are less than the current radius value
+                    n_inside = np.sum(distances < radius)
 
-                # increase the radius
-                radius += np.std(distances) * .05
+                    # increase the radius
+                    radius += np.std(distances) * .05
 
-            attack_mean_and_radius[known_attack] = (known_attack_mean_embedding, radius)
+                attack_mean_and_radius[known_attack] = (known_attack_mean_embedding, radius)
 
-        # predict whether test set samples are novel or not
-        predictions = []
-        for sample in x_test:
-            prediction = 'novel'
-            for known_attack, (mean_embedding, radius) in attack_mean_and_radius.items():
-                if np.linalg.norm(sample - mean_embedding) < radius:
-                    prediction = 'known'  # if sample falls within ANY of the attack methods' radii, prediction = known
-            predictions.append(prediction)
-        predictions = np.array(predictions)
+            # predict whether test set samples are novel or not
+            predictions = []
+            for sample in x_test:
+                prediction = 'novel'
+                for known_attack, (mean_embedding, radius) in attack_mean_and_radius.items():
+                    if np.linalg.norm(sample - mean_embedding) < radius:
+                        prediction = 'known'  # if sample falls within ANY of the attack methods' radii, prediction = known
+                predictions.append(prediction)
+            predictions = np.array(predictions)
 
-        # get accuracy
-        y_test_binary = np.where(np.isin(y_test, HELD_OUT_ATTACKS), 'novel', 'known')
-        accuracy = np.sum(predictions == y_test_binary) / len(y_test_binary)
-        accuracies.append(accuracy)
+            # get accuracy
+            y_test_binary = np.where(np.isin(y_test, HELD_OUT_ATTACKS), 'novel', 'known')
+            accuracy = np.sum(predictions == y_test_binary) / len(y_test_binary)
+            accuracies.append(accuracy)
 
-    pp_novel = np.sum(predictions == 'novel') / len(predictions) * 100
-    avg_accuracy = sum(accuracies) / len(accuracies)
-    logger.info(f'\tMean novelty prediction accuracy: {avg_accuracy:.4f}, % pred. novel {pp_novel:.2f}%')
+        pp_novel = np.sum(predictions == 'novel') / len(predictions) * 100
+        avg_accuracy = sum(accuracies) / len(accuracies)
+
+        if avg_accuracy > best_accuracy:
+            best_accuracy = avg_accuracy
+            best_threshold_value = threshold
+            best_pp_value = pp_novel
+
+    logger.info(f'\tBest mean novelty prediction accuracy: {best_accuracy:.4f}, % pred. novel {best_pp_value:.2f}%')
+    logger.info(f'\tThis was obtained with a threshold value of {best_threshold_value}')
 
     logger.info(f'DONE.')

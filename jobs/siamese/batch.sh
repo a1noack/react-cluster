@@ -2,30 +2,41 @@
 #./jobs/siamese/primer.sh [model] [dataset] [features] [lr] [batch sz] [hid l. sz] [emb. l. sz] [mem]
 #     [samples per class] [no. layers] [time] [samples per group] [where to avg] [max epochs] [early stop] [partition]
 
-#n=25000  # was 25,000
-#
-#for group_size in 1
-#do
-#  mem=100
-#  datasets=("wikipedia" "wikipedia_personal" "hatebase" "civil_comments" "imdb" "reddit_dataset" "gab_dataset")
-#  for dataset in "${datasets[@]}"
-#  do
-#    ./jobs/siamese/primer.sh 'all' $dataset 'btlc' .0001 32 128 32 $mem $n 3 1440 $group_size 'embedding' 50 10 gpu
-#  done
-#
-#  mem=150
-#  ./jobs/siamese/primer.sh 'all' 'sst' 'btlc' .0001 32 128 32 $mem $n 3 1440 $group_size 'embedding' 50 10 gpu
-#
-#  mem=200
-#  ./jobs/siamese/primer.sh 'all' 'climate-change_waterloo' 'btlc' .0001 32 128 32 $mem $n 3 1440 $group_size 'embedding' 50 10 gpu
-#done
-
+# ========== JOBS FOR NEW DEADLINE ==========
 mem=200
-n=60000
-#./jobs/siamese/primer.sh 'roberta' 'hatebase' 'btlc' .0001 32 128 32 50 1000 3 1440 1 'embedding' 10 2 gpu
-./jobs/siamese/primer.sh 'all' 'all' 'btlc_' .0001 32 128 32 $mem $n 3 2880 3 'embedding' 100 15 longgpu
-./jobs/siamese/primer.sh 'all' 'all' 'btlc_' .0001 32 128 32 $mem $n 3 2880 5 'embedding' 100 15 longgpu
-#./jobs/siamese/primer.sh 'all' 'all' 'btlc_' .0001 32 128 32 $mem $n 3 2880 7 'embedding' 100 15 longgpu
-./jobs/siamese/primer.sh 'all' 'all' 'btlc_' .0001 32 128 32 $mem $n 3 2880 9 'embedding' 100 15 longgpu
-#./jobs/siamese/primer.sh 'all' 'all' 'btlc_' .0001 32 128 32 $mem $n 3 2880 11 'embedding' 100 15 longgpu
-./jobs/siamese/primer.sh 'all' 'all' 'btlc_' .0001 32 128 32 $mem $n 3 2880 13 'embedding' 100 15 longgpu
+
+group_size=15
+n=25000
+
+#datasets=("climate-change_waterloo" "imdb" "sst" "wikipedia"
+#          "hatebase" "civil_comments" "abuse" "sentiment")
+datasets=("sst" "civil_comments")
+feature_sets=("b" "c" "btlc")
+
+out_sizes=(3 5 10)
+
+for out_size in "${out_sizes[@]}"; do
+  for dataset in "${datasets[@]}"; do
+    for feature_set in "${feature_sets[@]}"; do
+      ./jobs/siamese/primer.sh 'all' $dataset $feature_set .0001 32 128 $out_size $mem $n 3 1440 $group_size 'embedding' 30 5 gpu
+    done
+  done
+done
+
+
+
+# ========== JOBS FOR DIFFERENT SIZED GROUPS AND ALL SAMPLES ==========
+#mem=200
+#n=60000
+#./jobs/siamese/primer.sh 'all' 'all' 'btlc' .0001 32 128 32 $mem $n 3 4320 3 'embedding' 28 5 longgpu
+#./jobs/siamese/primer.sh 'all' 'all' 'btlc' .0001 32 128 32 $mem $n 3 4320 5 'embedding' 28 5 longgpu
+#./jobs/siamese/primer.sh 'all' 'all' 'btlc' .0001 32 128 32 $mem $n 3 4320 7 'embedding' 28 5 longgpu
+#./jobs/siamese/primer.sh 'all' 'all' 'btlc' .0001 32 128 32 $mem $n 3 4320 9 'embedding' 28 5 longgpu
+#./jobs/siamese/primer.sh 'all' 'all' 'btlc' .0001 32 128 32 $mem $n 3 4320 11 'embedding' 28 5 longgpu
+#./jobs/siamese/primer.sh 'all' 'all' 'btlc' .0001 32 128 32 $mem $n 3 4320 13 'embedding' 28 5 longgpu
+#./jobs/siamese/primer.sh 'all' 'all' 'btlc' .0001 32 128 32 $mem $n 3 4320 15 'embedding' 28 5 longgpu
+#./jobs/siamese/primer.sh 'all' 'all' 'btlc' .0001 32 128 32 $mem $n 3 4320 17 'embedding' 28 5 longgpu
+#./jobs/siamese/primer.sh 'all' 'all' 'btlc' .0001 32 128 32 $mem $n 3 4320 19 'embedding' 28 5 longgpu
+#./jobs/siamese/primer.sh 'all' 'all' 'btlc' .0001 32 128 32 $mem $n 3 4320 21 'embedding' 28 5 longgpu
+#./jobs/siamese/primer.sh 'all' 'all' 'btlc' .0001 32 128 32 $mem $n 3 4320 23 'embedding' 28 5 longgpu
+#./jobs/siamese/primer.sh 'all' 'all' 'btlc' .0001 32 128 32 $mem $n 3 4320 25 'embedding' 28 5 longgpu
