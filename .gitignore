@@ -6,4 +6,5 @@
 output/
 jobs/errors/
 jobs/logs/
-
+data/
+scripts/__pycache__/
