@@ -13,15 +13,23 @@ n=25000
 datasets=("sst" "civil_comments")
 feature_sets=("b" "c" "btlc")
 
-out_sizes=(3 5 10)
-
-for out_size in "${out_sizes[@]}"; do
-  for dataset in "${datasets[@]}"; do
-    for feature_set in "${feature_sets[@]}"; do
-      ./jobs/siamese/primer.sh 'all' $dataset $feature_set .0001 32 128 $out_size $mem $n 3 1440 $group_size 'embedding' 30 5 gpu
-    done
+for dataset in "${datasets[@]}"; do
+  for feature_set in "${feature_sets[@]}"; do
+    ./jobs/siamese/primer.sh 'all' $dataset $feature_set .0001 32 128 32 $mem $n 3 4320 $group_size 'embedding' 60 999 longgpu
   done
 done
+
+
+# ========== JOBS FOR DIFFERENT SIZED EMBEDDING LAYERS ==========
+#out_sizes=(3 5 10)
+#
+#for out_size in "${out_sizes[@]}"; do
+#  for dataset in "${datasets[@]}"; do
+#    for feature_set in "${feature_sets[@]}"; do
+#      ./jobs/siamese/primer.sh 'all' $dataset $feature_set .0001 32 128 $out_size $mem $n 3 1440 $group_size 'embedding' 30 5 gpu
+#    done
+#  done
+#done
 
 
 
