@@ -543,7 +543,8 @@ if __name__ == '__main__':
 
     logger.info(f'Same/different attack method AUROCs:')
     scores_dict = {}
-    for group_size in range(2, 25):
+    group_sizes = list(range(2, 10, 1)) + list(range(10, 30, 2)) + list(range(30, 60, 3)) + list(range(60, 100, 4)) + list(range(100, 151, 5))
+    for group_size in group_sizes:
         ys = []
         outputs = []
 
