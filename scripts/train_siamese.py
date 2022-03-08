@@ -308,6 +308,12 @@ if __name__ == '__main__':
         else:
             no_improve_ctr += 1
 
+        # if early_stop parameter is the special value, save every model after a certain number of epochs
+        if args.early_stop == 999 and epoch > .8 * args.max_epochs:
+            torch.save(net.state_dict(), os.path.join(out_dir, f'siamese_net_{epoch}.pt'))
+            logger.info(f'\tSaving model weights, but not necessarily lowest val loss')
+            no_improve_ctr = 0
+
         # early stop if no recent improvement
         if no_improve_ctr >= args.early_stop:
             logger.info('No improvement in {} loss in {} epochs. Ending training.'.format(
