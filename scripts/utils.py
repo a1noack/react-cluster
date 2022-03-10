@@ -112,6 +112,13 @@ def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbo
             # get the name of the attack that created this instance
             attack = instance['primary_key'][0]
 
+            # check to make sure required features are present
+            required_features = set(FEATURES[feats].copy())
+            present_features = set(list(instance['deliverable'].keys()))
+
+            if not required_features.issubset(present_features):
+                continue
+
             # update frequency dictionary
             if attack not in attack_counts:
                 attack_counts[attack] = 1
