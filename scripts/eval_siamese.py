@@ -65,6 +65,7 @@ if __name__ == '__main__':
     out_dir = os.path.join(args.out_dir, "eval_siamese_{}_{}_{}_{}_{}".format(
                                args.model, args.dataset, args.features, int(time.time()), si_emb_size))
     Path(out_dir).mkdir(parents=True, exist_ok=True)
+    Path(os.path.join(out_dir, 'group_predictions')).mkdir(parents=True, exist_ok=True)
     output_file_handler = logging.FileHandler(os.path.join(out_dir, 'output.log'))
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     output_file_handler.setFormatter(formatter)
@@ -286,18 +287,18 @@ if __name__ == '__main__':
     group_numbers = []
     # for i in range(len(y_test_copy)):
     for group_no in set(un_df_test['group_no']):
-        logger.info(f'group_no = {group_no}')
+        # logger.info(f'group_no = {group_no}')
         # current_class = y_test_copy[i]  # get sample's class
         # class_probs = y_test_probs[y_test_copy == current_class]  # get only those predictions for the current_class
         # group_probs = class_probs[np.random.randint(len(class_probs), size=args.group_size)]  # randomly sample
 
         # group_idxs = list(group_no_test[group_no_test == group_no].index)  # get the indices for this group
         group_idxs = list(np.argwhere(unemb_group_no_test == group_no).flatten())  # get the indices for this group
-        logger.info(f'group_idxs = {group_idxs}')
+        # logger.info(f'group_idxs = {group_idxs}')
         group_probs = y_test_probs[group_idxs]  # get the prediction probabilities for this group
-        logger.info(f'group_probs.shape = {group_probs.shape}')
+        # logger.info(f'group_probs.shape = {group_probs.shape}')
         current_class = y_test_copy[group_idxs[0]]  # get the class for this group (the first sample in the group)
-        logger.info(f'current_class = {current_class}')
+        # logger.info(f'current_class = {current_class}')
 
         # calculate entropy for group by averaging predictions and getting entropy of average
         group_probs_avg = group_probs.mean(axis=0)
@@ -421,6 +422,7 @@ if __name__ == '__main__':
     s = time.time()
     logger.info(f'Evaluating mean embeddings for prediction:')
     scores_dict = {}
+    pred_path = os.path.join(out_dir, 'group_predictions')
 
     for novel_attack in HELD_OUT:
         try:
@@ -478,12 +480,12 @@ if __name__ == '__main__':
             # keys_to_save = np.array(keys_to_save)
 
             # save outputs for this novel attack
-            np.save(os.path.join(out_dir, f'is_novel_{novel_attack}.npy'), is_novel)
-            np.save(os.path.join(out_dir, f'smallest_percentiles_{novel_attack}.npy'), smallest_percentiles)
-            np.save(os.path.join(out_dir, f'closest_attacks_{novel_attack}.npy'), closest_attacks)
-            np.save(os.path.join(out_dir, f'closest_attacks_dists_{novel_attack}.npy'), closest_attacks_dists)
-            np.save(os.path.join(out_dir, f'smallest_distances_{novel_attack}.npy'), smallest_distances)
-            np.save(os.path.join(out_dir, f'group_numbers_{novel_attack}.npy'), group_nos)
+            np.save(os.path.join(pred_path, f'is_novel_{novel_attack}.npy'), is_novel)
+            np.save(os.path.join(pred_path, f'smallest_percentiles_{novel_attack}.npy'), smallest_percentiles)
+            np.save(os.path.join(pred_path, f'closest_attacks_{novel_attack}.npy'), closest_attacks)
+            np.save(os.path.join(pred_path, f'closest_attacks_dists_{novel_attack}.npy'), closest_attacks_dists)
+            np.save(os.path.join(pred_path, f'smallest_distances_{novel_attack}.npy'), smallest_distances)
+            np.save(os.path.join(pred_path, f'group_numbers_{novel_attack}.npy'), group_nos)
             # np.save(os.path.join(out_dir, f'keys_to_save_{novel_attack}.npy'), keys_to_save)
 
             # compute AUROC for this novel attack
