@@ -13,6 +13,7 @@ in_dir=$5
 out_dir=$6
 siamese_net_dir=$7
 group_size=$8
+epoch=$9
 
 python3 scripts/eval_siamese.py \
   --model $model \
@@ -22,4 +23,5 @@ python3 scripts/eval_siamese.py \
   --in_dir $in_dir \
   --out_dir $out_dir \
   --siamese_net_dir $siamese_net_dir \
-  --group_size $group_size
+  --group_size $group_size \
+  --epoch $epoch

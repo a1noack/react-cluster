@@ -57,13 +57,14 @@ if __name__ == '__main__':
     cmd_opt.add('--out_dir', type=str, help='Where to save the results for this clustering experiment.')
     cmd_opt.add('--siamese_net_dir', type=str,
                 help='the path to where the Siamese network AND the training sample keys AND scaler is saved')
+    cmd_opt.add('--epoch', type=int, default=0, help='which epoch to get the siamese net weights for')
     cmd_opt.add('--group_size', type=int, default=0, help='size of the groups of samples to embed with the Siamese net')
     args = cmd_opt.parse_args()
 
     # create output directory
     si_emb_size = int(args.siamese_net_dir.split('_')[-4])
-    out_dir = os.path.join(args.out_dir, "eval_siamese_{}_{}_{}_{}_{}".format(
-                               args.model, args.dataset, args.features, int(time.time()), si_emb_size))
+    out_dir = os.path.join(args.out_dir, "eval_siamese_{}_{}_{}_{}_{}_{}".format(
+                               args.model, args.dataset, args.features, int(time.time()), si_emb_size, args.epoch))
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     Path(os.path.join(out_dir, 'group_predictions')).mkdir(parents=True, exist_ok=True)
     output_file_handler = logging.FileHandler(os.path.join(out_dir, 'output.log'))
@@ -117,7 +118,10 @@ if __name__ == '__main__':
     net = SiameseNet(in_size=df.shape[1]-2, hid_size=net_args['hid_size'],
                      out_size=net_args['out_size'], n_layer=net_args['n_layer'],
                      drop_prob=net_args['drop_prob'], group_size=args.group_size)
-    net.load_state_dict(torch.load(os.path.join(args.siamese_net_dir, 'siamese_net.pt'), map_location=device))
+    if args.epoch == 0:
+        net.load_state_dict(torch.load(os.path.join(args.siamese_net_dir, 'siamese_net.pt'), map_location=device))
+    else:
+        net.load_state_dict(torch.load(os.path.join(args.siamese_net_dir, f'siamese_net_{args.epoch}.pt'), map_location=device))
     net.to(device)
     logger.info(f'Loaded saved model weights.')
 

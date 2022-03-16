@@ -11,6 +11,7 @@ mem=$9
 time=${10}
 partition=${11}
 emb_size=${12}
+epoch=${13}
 
 job_name="SiE_${model}_${dataset}_${features}_${group_size}_${emb_size}"
 
@@ -22,4 +23,4 @@ sbatch --mem=${mem}G \
     --job-name=$job_name \
     --output=jobs/logs/$job_name \
     --error=jobs/errors/$job_name \
-    jobs/eval/runner.sh $model $dataset $features $n $in_dir $out_dir $siamese_net_dir $group_size
+    jobs/eval/runner.sh $model $dataset $features $n $in_dir $out_dir $siamese_net_dir $group_size $epoch
