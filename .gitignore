@@ -8,3 +8,12 @@ jobs/errors/
 jobs/logs/
 data/
 scripts/__pycache__/
+jobs/siamese_ava
+finetuned_bert_stuff/
+jobs/eval_ava
+jobs/classify_ava
+jobs/distribute_exp
+jobs/make_exp
+filtered_csvs/
+whole_catted_dataset.csv
+target_models/

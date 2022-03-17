@@ -17,7 +17,7 @@ import torch
 from torch.utils.data import DataLoader
 import yaml
 
-from utils import load_joblib_data, downsample, plot_tsne
+from utils import load_joblib_data, downsample, plot_tsne, re_encode_with_bertclassifier, load_bert_detector
 from models import NormalDataset, SiameseDataset, SiameseNet
 
 
@@ -77,6 +77,7 @@ if __name__ == '__main__':
     cmd_opt.add('--use_elite_attackers_only', type=int, default=1, help='if 1, use only the elite attack methods')
     cmd_opt.add('--held_out_dataset', type=str, default='',
                 help='which domain dataset to remove from training data and only test on')
+    # cmd_opt.add('--detection_bert_root', type=str, default=None, help='if valid, use bert in that root to re-encode tp_bert')
 
     # args defining Siamese network architecture
     cmd_opt.add('--hid_size', type=int, default=128, help='the number of neurons per hidden layer')
@@ -101,6 +102,7 @@ if __name__ == '__main__':
     cmd_opt.add('--out_dir', type=str, help='where to save the results for this clustering experiment')
 
     args = cmd_opt.parse_args()
+    detection_bert_root = '/extra/ucinlp0/kasthana/react-cluster/finetuned_bert_stuff/hatebase_deliverable/clean_vs_all/bert/BERT_DETECTION'
 
     # set device
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
@@ -121,15 +123,18 @@ if __name__ == '__main__':
     s = time.time()
     logger.info(f'Features to load for each sample: {args.features}')
     logger.info(f'Loading the data...')
-    dir_path = os.path.join(args.in_dir, 'extracted_features')  # , f'{args.model}_{args.dataset}')
+    # dir_path = os.path.join(args.in_dir, 'extracted_features')  # , f'{args.model}_{args.dataset}')
+    dir_path = '/extra/ucinlp0/kasthana/react-cluster/filtered_csvs'
     if args.use_elite_attackers_only:
         samples, labels, keys, attack_counts = load_joblib_data(args.model, args.dataset, dir_path,
                                                                 args.compress_features, args.features,
                                                                 logger, attacks=ELITE_ATTACKS+HELD_OUT_ATTACKS,
-                                                                use_variants=False)
+                                                                use_variants=False,
+                                                                detection_bert_root=detection_bert_root)
     else:
         samples, labels, keys, attack_counts = load_joblib_data(args.model, args.dataset, dir_path,
-                                                            args.compress_features, args.features, logger)
+                                                            args.compress_features, args.features, logger,
+                                                            detection_bert_root=detection_bert_root)
     logger.info(f'Loaded the data. {time.time() - s:.2f}s.')
     logger.info(f'Attack counts: {attack_counts}')
 
