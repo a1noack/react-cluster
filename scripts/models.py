@@ -1,3 +1,5 @@
+"""This module holds the classes for Siamese networks and the classes for the
+datasets needed to train and evaluate them"""
 import random
 
 import torch

@@ -1,3 +1,5 @@
+"""This module holds some helper functions, one of which is the function used
+ for loading the attacked sample joblib files"""
 import joblib
 import os
 import random

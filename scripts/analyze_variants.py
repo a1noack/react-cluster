@@ -1,3 +1,6 @@
+"""This script compares the attacked text samples produced by the variant attack methods
+to their respective original attack methods; it does this using a simple string equals
+comparison, but also a BERT score comparison"""
 import logging
 import os
 
