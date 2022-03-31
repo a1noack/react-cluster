@@ -23,6 +23,7 @@ import yaml
 
 
 from utils import load_joblib_data, downsample
+from utils import load_joblib_data_temp
 
 
 # ATTACKS = ['hotflip', 'deepwordbug', 'textbugger', 'pruthi', 'clean', 'iga_wang', 'faster_genetic', 'genetic']
@@ -47,12 +48,13 @@ if __name__ == '__main__':
     cmd_opt.add('--model', type=str, default='all', help="Name of target model for which the attacks were created.")
     cmd_opt.add('--dataset', type=str, default='hatebase', help="Name of dataset used to create the attacks.")
     cmd_opt.add('--features', type=str, default='btlc', help='feature groups to include: b, bt, btl, or btlc.')
+    cmd_opt.add('--detection_bert_root', type=str, default=None, help='if valid, use bert in that root to re-encode tp_bert')
     cmd_opt.add('--compress_features', type=int, default=0,
                 help='compress all features with more than one dimension down to have at most this many dimensions.')
     cmd_opt.add('--group_size', type=int, default=5, help='group size for averaging in input space')
     cmd_opt.add('--n', type=int, default=0, help="The number of attacks to keep per attack method.")
     cmd_opt.add('--novel_attacks', type=int, help='If 1, use novel attack methods IN ADDITION to base elite attacks')
-    cmd_opt.add('--in_dir', type=str, default='data/',
+    cmd_opt.add('--in_dir', type=str, default='filtered_data/hatebase',
                 help='The path to the folder containing the joblib files for the extracted samples.')
     cmd_opt.add('--where_to_avg', type=str, default='input',
                 help='where to average the samples when group size > 1; either "embedding" or "input"')
@@ -63,15 +65,27 @@ if __name__ == '__main__':
     args = cmd_opt.parse_args()
 
     # create output directory
-    out_dir = os.path.join(args.out_dir,
-                           "classify_{}_{}_{}_{}_{}_nov_pred-{}".format(
-                               args.model,
-                               args.dataset,
-                               args.features,
-                               args.compress_features,
-                               args.novel_attacks,
-                               args.novelty_prediction
-                           ))
+    if args.detection_bert_root is None:
+        out_dir = os.path.join(args.out_dir,
+                            "classify_{}_{}_{}_{}_{}_nov_pred-{}".format(
+                                args.model,
+                                args.dataset,
+                                args.features,
+                                args.compress_features,
+                                args.novel_attacks,
+                                args.novelty_prediction
+                            ))
+    else:
+        out_dir = os.path.join(args.out_dir,
+                            "classify_{}_{}_{}_{}_{}_ft-bert_nov_pred-{}".format(
+                                args.model,
+                                args.dataset,
+                                args.features,
+                                args.compress_features,
+                                args.novel_attacks,
+                                args.novelty_prediction
+                            ))
+
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     output_file_handler = logging.FileHandler(os.path.join(out_dir, 'output.log'))
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
@@ -82,10 +96,16 @@ if __name__ == '__main__':
     logger.info(f'Training classifer on attacks for {args.model}/{args.dataset}.')
     s = time.time()
     logger.info(f'Loading the data. Features: {args.features}')
-    dir_path = os.path.join(args.in_dir, 'extracted_features')  # , f'{args.model}_{args.dataset}')
-    samples, labels, keys, attack_counts = load_joblib_data(args.model, args.dataset, dir_path,
+    # dir_path = os.path.join(args.in_dir, 'extracted_features')  # , f'{args.model}_{args.dataset}')
+
+    dir_path = os.path.join(os.getcwd(), args.in_dir)
+    logger.info(f'dir path: {dir_path}')
+    logger.info(f'detection bert root: {args.detection_bert_root}')
+
+    samples, labels, keys, attack_counts = load_joblib_data_temp(args.model, args.dataset, dir_path,
                                                             0, args.features, logger, keep_prob=.2,
-                                                            attacks=ATTACKS + NOVEL_ATTACKS)
+                                                            attacks=ATTACKS + NOVEL_ATTACKS, 
+                                                            detection_bert_root=args.detection_bert_root)
     # remove attacks that aren't in new, smaller group
     if args.novel_attacks:
         attacks_to_use = ATTACKS + NOVEL_ATTACKS
