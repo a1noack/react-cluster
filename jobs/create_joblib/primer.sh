@@ -2,7 +2,7 @@ dataset=$1
 nodelist_=$2
 
 job_name="create_joblib_${dataset}"
-mem_=50
+mem_=100
 
 sbatch --mem=${mem_}G \
        --time=1440 \

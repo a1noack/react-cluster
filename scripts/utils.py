@@ -38,6 +38,106 @@ DATASET_GROUPS = {
     'all': ['wikipedia', 'hatebase', 'civil_comments', 'climate-change_waterloo', 'imdb', 'sst']
 }
 
+def load_joblib_data_temp(model, dataset, dir_path, n_dims, feats, logger=None, verbosity=0,
+                     keep_prob=.45, attacks=None, use_variants=True, detection_bert_root=None):
+
+    # create containers
+    samples = {}
+    labels = []
+    keys = []  # save the primary keys so we can get original text data
+    attack_counts = {}  # frequency dictionary for attacks
+
+    assert detection_bert_root is not None, 'pass a value for the argument detection_bert_root'
+
+    filename = 'data.joblib'
+
+    try:
+        instances = joblib.load(os.path.join(dir_path, filename))
+    except ValueError:
+        logger.info(f'Error reading file with filename: {filename}')
+
+    first_sample = True
+
+    if detection_bert_root != None:
+        bert_detector = load_bert_detector(detection_bert_root)
+        instances = re_encode_with_bertclassifier(instances, bert_detector, logger)
+        logger.info(f'\t Done with Re Encoding Features')
+        del bert_detector
+
+    # load the information for one instance
+    for num, instance in instances.items():
+
+        # get the name of the attack that created this instance
+        attack = instance['primary_key'][0]
+
+        # check to make sure required features are present
+        required_features = set(FEATURES[feats].copy())
+        present_features = set(list(instance['deliverable'].keys()))
+
+        if not required_features.issubset(present_features):
+            continue
+
+        # update frequency dictionary
+        if attack not in attack_counts:
+            attack_counts[attack] = 1
+        else:
+            attack_counts[attack] += 1
+
+        for feature_name, feature_values in instance['deliverable'].items():
+            if feature_name in FEATURES[feats]:
+                # concatenate all of the feature values for this sample
+                if verbosity > 0 and logger is not None and first_sample:
+                    logger.info(f'\t{feature_name}: {feature_values.shape[1]}')
+                feature_values = feature_values.flatten()
+                if feature_name == 'tm_posterior' and len(feature_values) > 1:
+                    feature_values = np.array([feature_values[-1]])
+                if feature_name in samples:
+                    samples[feature_name].append(feature_values)
+                else:
+                    samples[feature_name] = [feature_values]
+        first_sample = False
+
+        # add instance's feature and label to the containers
+        labels.append(attack)
+        keys.append(instance['primary_key'])
+
+    for feature_name, feature_values in samples.items():
+        try:
+            samples[feature_name] = np.vstack(feature_values)
+        except ValueError:
+            logger.info(f'Shape mismatches for feature name = {feature_name}')
+            shapes = {}
+            for i, sample in enumerate(feature_values):
+                if sample.shape not in shapes:
+                    shapes[sample.shape] = [1, {keys[i][4]: 1}]
+                else:
+                    shapes[sample.shape][0] += 1
+                    if keys[i][4] not in shapes[sample.shape][1]:
+                        shapes[sample.shape][1][keys[i][4]] = 1
+                    else:
+                        shapes[sample.shape][1][keys[i][4]] += 1
+
+            logger.info(f'Shapes counts: {shapes}')
+
+    # if n_dims is not 0, compress number of dimensions for this feature group
+    if n_dims != 0:
+        for feature_name, feature_values in samples.items():
+            # only compress certain groups of features
+            if feature_name in ['tp_bert', 'lm_proba_and_rank', 'tm_activation', 'tm_gradient'] and \
+                    feature_values.shape[1] > n_dims:
+                pca = PCA(n_components=n_dims)
+                samples[feature_name] = pca.fit_transform(feature_values)
+            else:
+                samples[feature_name] = feature_values
+
+    # merge all feature groups into one feature vector
+    all_data = []
+    for feature_name, feature_values in samples.items():
+        all_data.append(feature_values)
+    samples = np.concatenate(all_data, axis=1)
+
+    return samples, labels, keys, attack_counts
+    
 
 def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbosity=0,
                      keep_prob=.45, attacks=None, use_variants=True, detection_bert_root=None):
@@ -60,6 +160,7 @@ def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbo
 
     # load all of the joblib files under dir_path
     thresh = inc = .1
+    
 
     for ii, filename in enumerate(os.listdir(dir_path)):
         if ii / len(os.listdir(dir_path)) > thresh and logger is not None:
@@ -109,8 +210,10 @@ def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbo
             if 'v1' in filename or 'v2' in filename or 'v3' in filename:
                 continue
 
-        if dataset == 'hatebase':
-            filename = 'hatebase.joblib'
+        if detection_bert_root != None:
+            filename = 'data.joblib'
+
+        logger.info(f'--detection_bert_root: {detection_bert_root}')
 
         try:
             instances = joblib.load(os.path.join(dir_path, filename))
@@ -330,9 +433,9 @@ def re_encode_with_bertclassifier(data_dict, bert_detector, logger=None):
     with torch.no_grad():
         for key in tqdm(list(data_dict.keys())):
             instance = data_dict[key]
-            logger.info(f'\t Keys: {instance.keys()}')
+            # logger.info(f'\t Keys: {instance.keys()}')
             deliverable = instance['deliverable']
-            logger.info(f'\t Deliverable Keys: {deliverable.keys()}')
+            # logger.info(f'\t Deliverable Keys: {deliverable.keys()}')
             # logger.info(f'\t Instance: {instance}')
             old_bert_shape = instance['deliverable']['tp_bert'].shape
             # logger.info(f'\t OLD TP BERT SHAPE: {old_bert_shape}')

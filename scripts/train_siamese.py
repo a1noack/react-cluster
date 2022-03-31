@@ -17,7 +17,8 @@ import torch
 from torch.utils.data import DataLoader
 import yaml
 
-from utils import load_joblib_data, downsample, plot_tsne
+from utils import load_joblib_data, downsample, plot_tsne, re_encode_with_bertclassifier, load_bert_detector
+from utils import load_joblib_data_temp
 from models import NormalDataset, SiameseDataset, SiameseNet
 
 
@@ -70,6 +71,7 @@ if __name__ == '__main__':
     cmd_opt.add('--model', type=str, default='roberta', help="Name of target model for which the attacks were created")
     cmd_opt.add('--dataset', type=str, default='sst', help="Name of dataset used to create the attacks")
     cmd_opt.add('--features', type=str, default='btlc', help='feature groups to include: b, bt, btl, or btlc')
+    cmd_opt.add('--detection_bert_root', type=str, default=None, help='if valid, use bert in that root to re-encode tp_bert')
     cmd_opt.add('--compress_features', type=int, default=0,
                 help='compress all features with > 1 dim. down to at most this many dims.')
     cmd_opt.add('--n', type=int, default=0, help="The number of attacks to keep per attack method")
@@ -97,7 +99,7 @@ if __name__ == '__main__':
     cmd_opt.add('--device', type=int, default=0, help='the number of the device to be used')
 
     # args for I/O
-    cmd_opt.add('--in_dir', type=str, help='path to folder containing joblib files for extracted samples')
+    cmd_opt.add('--in_dir', type=str, help='path to folder containing joblib files under the filtered data folder')
     cmd_opt.add('--out_dir', type=str, help='where to save the results for this clustering experiment')
 
     args = cmd_opt.parse_args()
@@ -106,9 +108,16 @@ if __name__ == '__main__':
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
 
     # create output directory
-    out_dir = os.path.join(args.out_dir, "siamese_{}_{}_{}_{}_{}_{}_{}_{}_{}_{}".format(
-        args.model, args.dataset, args.features, args.lr, args.batch_size,
-        args.hid_size, args.out_size, args.group_size, args.where_to_avg, int(time.time())))
+
+    if args.detection_bert_root is None:
+        out_dir = os.path.join(args.out_dir, "siamese_{}_{}_{}_{}_{}_{}_{}_{}_{}_{}".format(
+            args.model, args.dataset, args.features, args.lr, args.batch_size,
+            args.hid_size, args.out_size, args.group_size, args.where_to_avg, int(time.time())))
+    else:
+        out_dir = os.path.join(args.out_dir, "siamese_{}_{}_{}_{}_{}_{}_{}_{}_{}_{}_{}".format(
+            args.model, args.dataset, args.features, args.lr, args.batch_size,
+            args.hid_size, args.out_size, args.group_size, args.where_to_avg, 'ft-bert', int(time.time())))
+
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     output_file_handler = logging.FileHandler(os.path.join(out_dir, 'output.log'))
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
@@ -121,15 +130,22 @@ if __name__ == '__main__':
     s = time.time()
     logger.info(f'Features to load for each sample: {args.features}')
     logger.info(f'Loading the data...')
-    dir_path = os.path.join(args.in_dir, 'extracted_features')  # , f'{args.model}_{args.dataset}')
+    # dir_path = os.path.join(args.in_dir, 'extracted_features')  # , f'{args.model}_{args.dataset}')
+    dir_path = os.path.join(os.getcwd(), args.in_dir)
+    logger.info(f'dir path: {dir_path}')
+    logger.info(f'detection bert root: {args.detection_bert_root}')
+
+    assert os.path.exists(os.path.join(dir_path, 'data.joblib')), 'joblib doesn not exist, please filter_csv and create_joblib exps'
+
     if args.use_elite_attackers_only:
-        samples, labels, keys, attack_counts = load_joblib_data(args.model, args.dataset, dir_path,
+        samples, labels, keys, attack_counts = load_joblib_data_temp(args.model, args.dataset, dir_path,
                                                                 args.compress_features, args.features,
                                                                 logger, attacks=ELITE_ATTACKS+HELD_OUT_ATTACKS,
-                                                                use_variants=False)
+                                                                use_variants=False, detection_bert_root=args.detection_bert_root)
     else:
-        samples, labels, keys, attack_counts = load_joblib_data(args.model, args.dataset, dir_path,
-                                                            args.compress_features, args.features, logger)
+        samples, labels, keys, attack_counts = load_joblib_data_temp(args.model, args.dataset, dir_path,
+                                                            args.compress_features, args.features, logger,
+                                                            detection_bert_root=args.detection_bert_root)
     logger.info(f'Loaded the data. {time.time() - s:.2f}s.')
     logger.info(f'Attack counts: {attack_counts}')
 
