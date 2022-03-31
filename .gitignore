@@ -4,7 +4,15 @@
 
 # local directories
 output/
+original_data/
 jobs/errors/
 jobs/logs/
+jobs/eval_ava/
+jobs/siamese_ava/
+jobs/classify_ava
+filtered_data/
 data/
+detection-experiments/
 scripts/__pycache__/
+target_models/
+

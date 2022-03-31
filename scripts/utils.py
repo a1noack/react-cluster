@@ -1,8 +1,8 @@
-"""This module holds some helper functions, one of which is the function used
- for loading the attacked sample joblib files"""
 import joblib
 import os
 import random
+import torch
+import json
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,6 +10,10 @@ import pandas as pd
 import seaborn as sns
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+from tqdm import tqdm
+from model_loading import load_target_model
+import sys
+from magic_vars import PRIMARY_KEY_FIELDS
 
 
 BERT_FEATS = ['tp_bert']
@@ -36,7 +40,7 @@ DATASET_GROUPS = {
 
 
 def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbosity=0,
-                     keep_prob=.45, attacks=None, use_variants=True):
+                     keep_prob=.45, attacks=None, use_variants=True, detection_bert_root=None):
     """
     Load all of the joblib files in dir_path. Each of the joblib
     files should contain the extracted features for attack instances
@@ -56,6 +60,7 @@ def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbo
 
     # load all of the joblib files under dir_path
     thresh = inc = .1
+
     for ii, filename in enumerate(os.listdir(dir_path)):
         if ii / len(os.listdir(dir_path)) > thresh and logger is not None:
             logger.info(f'\tLoaded {thresh * 100: .1f}% of samples')
@@ -64,6 +69,9 @@ def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbo
 
         # only load those joblib files for the specified model
         if model not in filename and model != 'all':
+            continue
+
+        if '.joblib' not in filename:
             continue
 
         # filter based on dataset
@@ -101,10 +109,19 @@ def load_joblib_data(model, dataset, dir_path, n_dims, feats, logger=None, verbo
             if 'v1' in filename or 'v2' in filename or 'v3' in filename:
                 continue
 
+        if dataset == 'hatebase':
+            filename = 'hatebase.joblib'
+
         try:
             instances = joblib.load(os.path.join(dir_path, filename))
         except ValueError:
             logger.info(f'Error reading file with filename: {filename}')
+
+        if detection_bert_root != None:
+            bert_detector = load_bert_detector(detection_bert_root)
+            instances = re_encode_with_bertclassifier(instances, bert_detector, logger)
+            logger.info(f'\t Done with Re Encoding Features')
+            del bert_detector
 
         # load the information for one instance
         for num, instance in instances.items():
@@ -283,3 +300,104 @@ def plot_tsne(data, labels, out_dir, ppl=20):
     plt.title(f't-SNE with perplexity = {ppl}')
     plt.savefig(os.path.join(out_dir, f'tsne{ppl}.png'))
     plt.close()
+
+def load_bert_detector(bert_detection_model_root):
+
+    if 'clean_vs_all' in bert_detection_model_root:
+        num_labels = 2
+    else:
+        num_labels = len(pd.read_csv(
+            os.path.join(bert_detection_model_root, 'train.csv')
+        )['attack_name'].unique())
+        
+    model_metadata = np.load(
+        os.path.join(bert_detection_model_root, 'BERT_DETECTION/bert/results.npy'),
+        allow_pickle = True
+    ).item()
+    max_seq_len = model_metadata['max_seq_len']
+    target_model_name = 'bert'
+    dir_target_model = os.path.join(bert_detection_model_root, 'BERT_DETECTION/bert')
+    bert_detector = load_target_model(
+        target_model_name, 
+        dir_target_model,  
+        max_seq_len ,
+        torch.device('cuda'), 
+        num_labels
+    )
+    return bert_detector
+
+def re_encode_with_bertclassifier(data_dict, bert_detector, logger=None):
+    with torch.no_grad():
+        for key in tqdm(list(data_dict.keys())):
+            instance = data_dict[key]
+            logger.info(f'\t Keys: {instance.keys()}')
+            deliverable = instance['deliverable']
+            logger.info(f'\t Deliverable Keys: {deliverable.keys()}')
+            # logger.info(f'\t Instance: {instance}')
+            old_bert_shape = instance['deliverable']['tp_bert'].shape
+            # logger.info(f'\t OLD TP BERT SHAPE: {old_bert_shape}')
+            new_tp_bert = bert_detector.get_cls_repr([instance['perturbed_text']]).cpu().numpy()
+            assert new_tp_bert.shape == old_bert_shape
+            instance['deliverable']['tp_bert'] = new_tp_bert 
+    return data_dict
+
+# pandas operations
+
+def get_pk_tuple_from_pandas_row(pandas_row):
+    return tuple([pandas_row[_PK] for _PK in PRIMARY_KEY_FIELDS])
+
+def drop_for_column_outside_of_values(df, column_name, values):
+    return df[df[column_name].isin(values)]
+
+def drop_for_column_inside_values(df, column_name, values):
+    return df[~df[column_name].isin(values)]
+
+def no_duplicate_entry(df, column_name):
+    return df[column_name].is_unique
+
+def no_duplicate_index(df):
+    return df.index.is_unique
+
+def get_src_instance_identifier_from_pandas_row(pandas_row):
+    """
+    returns an tuple idenfier unique to src instance
+
+    e.g. #777 sentence in SST is attacked by 7 attacks, those will share this identifier
+    """
+    return tuple([pandas_row['target_model_dataset'], pandas_row['test_index']])
+
+# file I/O
+
+def grab_joblibs(root_dir):
+    """
+    grab all joblibs in a root dir
+    """
+    files = []
+    # r=root, d=directories, f = files
+    for r, d, f in os.walk(root_dir):
+        for file in f:
+            if 'joblib' in file:
+                files.append(os.path.join(r, file))
+    return files
+
+def load_json(fpath):
+    with open(fpath) as f:
+        data = json.load(f)
+    return data
+
+def mkfile_if_dne(fpath):
+    if not os.path.exists(os.path.dirname(fpath)):
+        print('mkfile warning: making fdir since DNE: ',fpath)
+        os.makedirs(os.path.dirname(fpath))
+   
+def mkdir_if_dne(dpath):
+    if not os.path.exists(dpath):
+        os.makedirs(dpath)
+
+# hashing
+
+def get_pk_tuple(df, index):
+    _PK = sorted(['scenario', 'target_model_dataset', 'target_model',
+                  'attack_toolchain', 'attack_name', 'test_index'])
+    _PK = [df.at[index, i] for i in _PK]
+    return _PK

@@ -1,0 +1,6 @@
+SUPPORTED_TARGET_MODELS = set(['roberta','xlnet','bert', 'uclmr'])
+SUPPORTED_TARGET_MODEL_DATASETS= set(['fnc1', 'civil_comments', 'hatebase', 'wikipedia', 'sst', 'imdb', 'climate-change_waterloo', 'nuclear_energy', 'wikipedia_personal', 'gab_dataset', 'reddit_dataset'])
+SUPPORTED_ATTACKS =  set(['bae','deepwordbug', 'faster_genetic', 'genetic', 'hotflip', 'iga_wang', 'pruthi', 'pso', 'textbugger', 'textfooler', 'viper','clean', 'deepwordbugv1', 'deepwordbugv2', 'deepwordbugv3', 'deepwordbugv4', 'pruthiv1', 'pruthiv2', 'pruthiv3', 'pruthiv4', 'textbuggerv1', 'textbuggerv2', 'textbuggerv3', 'textbuggerv4'])
+UCLMR_SUPPORTED_ATTACKS =  set(['bae', 'deepwordbug', 'textbugger', 'textfooler', 'viper', 'clean'])
+SUPPORTED_ARCHS = set(['lr','lgb','nn'])
+PRIMARY_KEY_FIELDS = sorted(['scenario','target_model_dataset', 'target_model','attack_toolchain','attack_name', 'test_index'])
