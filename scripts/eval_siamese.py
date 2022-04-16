@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader
 import yaml
 
 from models import SiameseNet, NormalDataset, SiameseDataset
-from utils import load_joblib_data, downsample, plot_tsne
+from utils import load_joblib_data, downsample, plot_tsne, load_joblib_data_temp
 
 # use only the attacks below when determining cluster centers
 ATTACKS_CONSIDERED = ['hotflip', 'deepwordbug', 'textbugger', 'pruthi', 'clean']
@@ -51,6 +51,7 @@ if __name__ == '__main__':
     cmd_opt.add('--model', type=str, default='roberta', help="Name of target model for which the attacks were created.")
     cmd_opt.add('--dataset', type=str, default='sst', help="Name of dataset used to create the attacks.")
     cmd_opt.add('--features', type=str, default='btlc', help='feature groups to include: b, c, bt, btl, or btlc.')
+    cmd_opt.add('--detection_bert_root', type=str, default=None, help='if valid, use bert in that root to re-encode tp_bert')
     cmd_opt.add('--n', type=int, default=100, help="The number of attacks to keep per attack method.")
     cmd_opt.add('--in_dir', type=str,
                 help='The path to the folder containing the joblib files for the extracted samples.')
@@ -80,10 +81,12 @@ if __name__ == '__main__':
     s = time.time()
     logger.info(f'Features to load for each sample: {args.features}')
     logger.info(f'Loading the data...')
-    dir_path = os.path.join(args.in_dir, 'extracted_features')
-    samples, labels, keys, attack_counts = load_joblib_data(args.model, args.dataset, dir_path,
+    # dir_path = os.path.join(args.in_dir, 'extracted_features')
+    dir_path = args.in_dir
+    samples, labels, keys, attack_counts = load_joblib_data_temp(args.model, args.dataset, dir_path,
                                                             0, args.features, logger, keep_prob=.2,
-                                                            attacks=ATTACKS_CONSIDERED+HELD_OUT)
+                                                            attacks=ATTACKS_CONSIDERED+HELD_OUT,
+                                                            detection_bert_root=args.detection_bert_root)
     logger.info(f'Loaded the data. {time.time() - s:.2f}s.')
     logger.info(f'Attack counts: {attack_counts}')
 
