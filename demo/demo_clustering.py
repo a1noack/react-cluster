@@ -3,7 +3,7 @@ import os
 import pandas as pd
 import streamlit as st
 
-main_dir = os.getcwd()
+main_dir = os.path.join(os.getcwd(), 'demo')
 
 def main():
     st.set_page_config(layout='wide')
