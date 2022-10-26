@@ -10,7 +10,7 @@ In the image from the demo below, you can see that different attackers (Pruthi, 
 
 Things to note about the demo:
  - The attacks shown are successful SST-2 attacks created for all three target models (BERT, RoBERTa, and XLNET).
- - Each point on the t-SNE plot represents a group of 15 attacked samples.
+ - Each point on the t-SNE plot represents the average of a group of embeddings for 15 attacked samples.
  - The Siamese network was trained on DeepWordBug, HotFlip, Pruthi, TextBugger, and the "Clean" attack (the Clean attack does nothing and leaves the original text sample unchanged). The Siamese network did *not* see Faster Genetic, Genetic, or IGA Wang samples during training.
  - In the t-SNE plot, the black "X" shows where the currently selected group of attacked samples gets embedded by the Siamese network.
  - The table below the t-SNE plot lists the text samples that are in this group of 15.
